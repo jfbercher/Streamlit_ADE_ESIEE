@@ -267,10 +267,10 @@ MODALITY_ORDER = [
 # CM/TD et Autre = non comptabilisé (0)
 HETD_COEFFICIENTS_ESIEE = {
     'CM':         4 / 3,
-    'CM/TD':      0,
+    'CM/TD':      1.25,
     'CM-plus':    5 / 3,
     'TD':         1.0,
-    'TDR':        1.5,
+    'TDR':        4/3,
     'TP':         1 / 1.5,
     'TP Seul':    1.0,
     'Oraux':      1 / 1.5,
@@ -280,7 +280,7 @@ HETD_COEFFICIENTS_ESIEE = {
 
 HETD_COEFFICIENTS_Univ = {
     'CM':         1.5,
-    'CM/TD':      0,
+    'CM/TD':      1.25,
     'CM-plus':    1.5,
     'TD':         1.0,
     'TDR':        1.5,
@@ -470,7 +470,7 @@ def write_warnings_sheet(ws):
         ('Ordre de priorite',
          'CM/TD > Oraux > TDR > TP Seul > CM > TD > TP > Autre. '
          'Les patterns utilisent des limites de mots (\\b) pour eviter les faux-positifs partiels '
-         '(ex : "DTSTART" ne correspond pas a "TD").'),
+         '(ex : "TDSTART" ne correspond pas a "TD").'),
         ('Classe "Autre"',
          'Si la derniere ligne ne correspond a aucune modalite connue (Jury, Reunion, ...), '
          "l'evenement est classe \"Autre\". Ces heures ne sont generalement pas des heures d'enseignement."),
