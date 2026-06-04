@@ -100,19 +100,20 @@ def decode_description(desc_raw):
 # Filière / Promo Extraction
 # ---------------------------------------------------------------------------
 
-_CODE_RE  = re.compile(r'^[A-Z0-9][A-Z0-9\-]*$')  # all-caps token (no spaces, no lowercase)
-_PROMO_RE = re.compile(r'^E\d')                     # starts with E + digit → promo level
+_CODE_RE  = re.compile(r'^(?:[A-Z0-9][A-Z0-9\-]*|E\d[A-Za-z0-9\-]*)$')  # majuscules, ou E+chiffre avec minuscules possibles (ex: E3-1d-S1)
+_PROMO_RE = re.compile(r'^E\d')                                            # starts with E + digit → promo level
 
 
 def extract_codes(desc_lines):
     """
     Extract filière and promo codes from the beginning of desc_lines.
 
-    ADE places group/filière codes (all uppercase, no spaces) at the top of
-    the DESCRIPTION, before the course name or teacher name (which always
-    contain lowercase letters).  We collect all-caps tokens until the first
-    line that contains a lowercase character, then split them into:
-      - promos  : codes matching ^E\\d  (e.g. E4-BIO-S3-1, E3FT-1T-S1)
+    ADE places group/filière codes at the top of the DESCRIPTION, before the
+    course name or teacher name (which contain spaces).  Codes are compact
+    (no spaces): all-caps filières (BIO, AIC…) or E+digit promos that may
+    contain lowercase letters (E3-1d-S1, E3-1s-S1…).  We collect them until
+    the first line that does not match _CODE_RE, then split into:
+      - promos  : codes matching ^E\\d  (e.g. E2-5-EST, E3-1d-S1)
       - filieres: everything else        (e.g. BIO, AIC, DSIA, GI)
 
     Returns (promos: list[str], filieres: list[str]) — both deduplicated,
@@ -201,10 +202,11 @@ def process_events(raw_events):
                     print(modality)
                     break
 
-        # CM+ si : promo E1/E2, OU plus de 5 groupes (toutes années confondues)
+        # CM+ si : promo E1/E2, OU 5 groupes ou plus (toutes années confondues)
         base_mod = modality.replace("_Trou_ADE", "")
+        # ^E[12](-[A-Za-z]+)*$ : promotion entière (E2, E2-BIO…) mais pas un groupe (E2-5-EST, E3-1d-S1)
         is_cm_plus = base_mod == 'CM' and (
-            any(re.match(r'^E[12]', p) for p in promos) or len(promos) > 5
+            any(re.match(r'^E[12](-[A-Za-z]+)*$', p) for p in promos) or len(promos) >= 5
         )
         if is_cm_plus:
             modality = 'CM-plus_Trou_ADE' if '_Trou_ADE' in modality else 'CM-plus'
