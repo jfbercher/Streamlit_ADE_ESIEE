@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from collections import defaultdict
+import pandas as pd
 
 _PARIS_TZ = ZoneInfo("Europe/Paris")
 
@@ -225,6 +226,27 @@ def process_events(raw_events):
     records.sort(key=lambda r: r['dtstart'])
     return records
 
+
+# ---------------------------------------------------------------------------
+# Pivot table (pdc réalisé)
+# ---------------------------------------------------------------------------
+def compute_pdc_rea(df_input, out_mode='HETP'):
+    df_temp = df_input.copy()
+    
+    pt = pd.pivot_table(
+        data=df_temp, 
+        index=['Cours'],  
+        columns=['Activité'], 
+        aggfunc=['sum'], 
+        fill_value=0, 
+        values=[out_mode], 
+        margins=True, 
+        margins_name=f'Total ({out_mode})'
+    )
+    # Nettoyage des multi-index colonnes
+    pt.columns = [x[2] for x in pt.columns]
+    pt.index.name = 'ECUE'
+    return pt
 
 # ---------------------------------------------------------------------------
 # Excel Generation

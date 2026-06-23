@@ -26,6 +26,7 @@ from ade_heures import (
     parse_ics,
     process_events,
     extract_codes,
+    compute_pdc_rea,
 )
 
 # ---------------------------------------------------------------------------
@@ -340,7 +341,7 @@ st.download_button(
 st.markdown("---")
 st.header("🔍 Explorer les séances")
 
-tab_mod, tab_cours, tab_filiere = st.tabs(["Par modalité", "Par nom de cours", "Par filière"])
+tab_mod, tab_cours, tab_filiere, tab_pdc = st.tabs(["Par modalité", "Par nom de cours", "Par filière", "Votre PdC réalisé"])
 
 # ---- Tab : Par modalité ----
 with tab_mod:
@@ -506,3 +507,156 @@ with tab_filiere:
             hide_index=True,
             column_config=NUM_COL_CONFIG,
         )
+
+# ---- Tab : Par nom de cours ----
+with tab_pdc:
+    df_pdc = df.copy()
+    df_pdc["Nom"] = df_pdc["Nom"].apply(normalize_course_name)
+    #st.dataframe(df_pdc, use_container_width=True, hide_index=True, column_config=NUM_COL_CONFIG)
+    df_pdc = df_pdc.rename(columns={
+    "HETP (h)": "HETP",
+    "HETD (h)": "HETD",
+    "Nom": "Cours",
+    "Modalité": "Activité"
+    })
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        comment = '''total_hd = st.number_input(
+            "Total des heures dues au statut (en HETP), sans les décharges", 
+            value=400.0, 
+            step=0.5,
+            format="%.2f"
+        )'''
+        statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
+        statut = st.selectbox(
+           "Total des heures dues au statut (en HETP), sans les décharges", 
+           options=statuts, 
+           key="select_totalhd")
+        total_hd = float(statuts[statut])
+
+    with col2:
+        total_dech = st.number_input(
+            "Total des décharges (en HETP)", 
+            value=100.0, 
+            step=0.5,
+            format="%.2f"
+        )
+
+    total_htodo = total_hd - total_dech
+    st.write("Total des heures attendues (en HETP) :", total_htodo)
+
+    st.markdown("---")
+
+    tab_hetp, tab_hetd = st.tabs(["HETP", "HETD"])
+        
+    with tab_hetp:
+        st.subheader("Pdc HETP")
+        try:
+            df_hetp = compute_pdc_rea(df_pdc, "HETP")
+            st.dataframe(df_hetp, use_container_width=True, height='content')
+        except KeyError:
+            st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
+
+    pd.set_option('display.precision', 2)
+    df_hetd = df_hetp.apply(lambda x: x*2/3).rename(index={'Total (HETP)': 'Total (HETD)'}, 
+                                                    columns={'Total (HETP)': 'Total (HETD)'})
+            
+    with tab_hetd:
+        st.subheader("Pdc HETD")
+        try:
+            #df_hetd = compute_pdc_rea(df_pdc, "HETD")
+            st.dataframe(df_hetd, use_container_width=True, height='content')
+        except KeyError:
+            st.error("La colonne 'HETD' est introuvable dans le fichier fourni.")
+
+    total_hreal_hetp = df_hetp.loc['Total (HETP)', 'Total (HETP)']
+    total_hreal_hetd = df_hetd.loc['Total (HETD)', 'Total (HETD)'] 
+    st.write("Total des heures réalisées : ", round(total_hreal_hetp,2), ' HETP, soit ', round(total_hreal_hetd,2), 'HETD.')
+
+    # Calcul des heures complémentaires
+    total_hcomp_hetp =  total_hreal_hetp - total_htodo
+    total_hcomp_hetd = total_hcomp_hetp * 2 / 3
+
+
+    if total_hcomp_hetp > 0:
+        # Rémunération attendue
+        TARIF_HETP = 39.01
+        TARIF_HETD_UNIV = 43.50
+        TARIF_HETP_UNIV = TARIF_HETD_UNIV / 1.5
+        remu = min(200, total_hcomp_hetp) * TARIF_HETP + \
+                    max(0, total_hcomp_hetp - 200) * TARIF_HETP_UNIV
+
+
+            
+    # --- Extraction des totaux ---
+    total_hreal_hetp = df_hetp.loc['Total (HETP)', 'Total (HETP)']
+    total_hreal_hetd = df_hetd.loc['Total (HETD)', 'Total (HETD)'] 
+
+    # Hypothèse : total_htodo est calculé au préalable (ex: total_hd - total_dech)
+    total_hcomp_hetp = total_hreal_hetp - total_htodo
+    total_hcomp_hetd = total_hcomp_hetp * 2 / 3
+
+    st.markdown("#### Synthèse des Heures")
+
+    st.markdown(
+"""
+<style>
+/* Taille du titre (Label) */
+[data-testid="stMetricLabel"] {
+    font-size: 14px !important;
+}
+
+/* Taille de la valeur principale */
+[data-testid="stMetricValue"] {
+    font-size: 24px !important; /* Par défaut ~40px */
+}
+
+/* Taille du delta (sous-valeur en HETD) */
+[data-testid="stMetricDelta"] {
+    font-size: 18px !important;
+}
+</style>
+""",
+unsafe_allow_html=True
+)
+
+    # Affichage des métriques 
+    col_real, col_comp = st.columns(2)
+
+    with col_real:
+        st.metric(
+            label="⏳ Heures Réalisées", 
+            value=f"{total_hreal_hetp:.2f} HETP", 
+            delta=f"{total_hreal_hetd:.2f} HETD", 
+            delta_color="off" # "off" pour juste afficher la valeur HETD en gris sans flèche
+        )
+
+    with col_comp:
+        # On colore la métrique en vert si positif, rouge/gris si négatif
+        color_inverse = "normal" if total_hcomp_hetp >= 0 else "inverse"
+        st.metric(
+            label="➕ Heures Complémentaires", 
+            value=f"{total_hcomp_hetp:.2f} HETP", 
+            delta=f"{total_hcomp_hetd:.2f} HETD",
+            delta_color=color_inverse
+        )
+
+    # --- Section Rémunération ---
+    if total_hcomp_hetp > 0:
+        TARIF_HETP = 39.01
+        TARIF_HETD_UNIV = 43.50
+        TARIF_HETP_UNIV = TARIF_HETD_UNIV / 1.5
+        
+        remu = (min(200, total_hcomp_hetp) * TARIF_HETP + 
+                max(0, total_hcomp_hetp - 200) * TARIF_HETP_UNIV)
+        
+        remu_HETD = remu / TARIF_HETD_UNIV
+
+        st.markdown("#### Rémunération")
+        
+        # Un encadré vert (st.success) pour valoriser le gain
+        st.success(f"""
+        **Rémunération attendue  : {remu:.2f} €**, *soit l'équivalent de **{remu_HETD:.2f} HETD** (sur la base de {TARIF_HETD_UNIV:.2f}€ / heure de TD universitaire).*
+        """)
+
