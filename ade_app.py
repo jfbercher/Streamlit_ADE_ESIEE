@@ -10,6 +10,7 @@ import io
 import os
 import re
 import tempfile
+import requests
 from collections import defaultdict
 
 import pandas as pd
@@ -41,7 +42,7 @@ st.set_page_config(
 )
 
 st.title("Analyse des heures d'enseignement — ADE")
-st.caption("Importez un fichier `.ics` exporté depuis ADE pour obtenir le détail et le récapitulatif de vos heures.")
+st.caption("Utilisez votre numéro de ressource ADE ou importez un fichier `.ics` exporté depuis ADE pour obtenir le détail et le récapitulatif de vos heures.")
 
 st.error("🔴 **Version bêta** --- Cet outil est en cours de beta test. Les résultats n'ont pas encore été validés et une vérification de votre part est nécessaire. Merci de signaler toute anomalie sur [le lien suivant](https://docs.google.com/document/d/1QvYGU6BJAivPvYUNZ4nP_qpJm5ZgR8SAdQZUg8VvDrY/edit?usp=sharing).")
 
@@ -238,15 +239,53 @@ def style_modality(df_display):
 # File upload
 # ---------------------------------------------------------------------------
 
-uploaded = st.file_uploader(
-    "Choisissez un fichier ADE (.ics)",
-    type=["ics"],
-    help="Exportez votre emploi du temps depuis ADE au format iCalendar (.ics)",
-)
+col_ressource, col_ou, col_upload = st.columns([1, 0.2, 1])
 
-if uploaded is None:
-    st.info("Importez un fichier `.ics` pour commencer.")
+with col_upload:
+    uploaded = st.file_uploader(
+        "Choisissez un fichier ADE (.ics)",
+        type=["ics"],
+        help="Exportez votre emploi du temps depuis ADE au format iCalendar (.ics)",
+    )
+with col_ou:
+    st.markdown("<div style='text-align:center'> <strong><br><br>OU</strong> </div>", unsafe_allow_html=True) 
+
+with col_ressource:
+    RESSOURCE = st.text_input(
+        "Entrez votre numéro de ressource ADE (voir le numéro dans l'URL générée via export agenda dans ADE)",
+    )
+
+ical = None
+# Déclenchement
+if uploaded is None and not RESSOURCE:
+    st.info("Entrez un numéro de ressource ADE **ou** importez un fichier `.ics`.")
     st.stop()
+
+# si fichier uploadé
+if uploaded is not None:
+    ical = uploaded.getvalue()
+
+# si téléchargement depuis ADE
+elif RESSOURCE:
+    ical_URL = (
+        "https://edt-consult.univ-eiffel.fr/jsp/custom/modules/plannings/"
+        f"anonymous_cal.jsp?resources={RESSOURCE}&projectId=1&calType=ical"
+        "&startDay=01&startMonth=6&startYear=2025"
+        "&endDay=31&endMonth=08&endYear=2026"
+    )
+
+    response = requests.get(ical_URL)
+
+    if response.status_code != 200:
+        st.error("Erreur lors du téléchargement de l'agenda ADE.")
+        st.stop()
+
+    ical = response.content
+
+    uploaded = io.BytesIO(ical)
+    uploaded.name = "edt.ics"
+    uploaded.size = len(ical)
+
 
 # Parse — save to temp file so parse_ics can open it normally
 with tempfile.NamedTemporaryFile(suffix=".ics", delete=False) as tmp:
