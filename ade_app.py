@@ -167,7 +167,7 @@ def build_filiere_summary(df):
     return grp.sort_values("Heures", ascending=False).reset_index(drop=True)
 
 
-_COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|C(OURS)?)\s*\d+$', re.IGNORECASE)
+_COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
 
 def normalize_course_name(name):
     """Supprime les suffixes de groupe en fin de nom (TP1, TP2, C1, C2, TD1…)."""
