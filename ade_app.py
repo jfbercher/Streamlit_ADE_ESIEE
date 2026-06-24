@@ -11,10 +11,15 @@ import os
 import re
 import tempfile
 import requests
+import time
+from io import StringIO
 from collections import defaultdict
 
 import pandas as pd
 import streamlit as st
+from streamlit_local_storage import LocalStorage
+storage = LocalStorage()
+
 
 from ade_heures import (
     HETD_COEFFICIENTS_ESIEE,
@@ -29,6 +34,32 @@ from ade_heures import (
     extract_codes,
     compute_pdc_rea,
 )
+
+
+# ---------------------------------------------------------------------------
+# Session restore
+# ---------------------------------------------------------------------------
+
+old_setItem = storage.setItem
+#local_storage.setItem = lambda key, value: old_setItem(key, json.dumps(value), key=key)
+storage.setItem = lambda key, value: old_setItem(key, value, key=key+'_'+str(time.time()))
+old_deleteItem = storage.deleteItem
+storage.deleteItem = lambda key: old_deleteItem(key, key=key+'_'+str(time.time()))
+
+if "restored" not in st.session_state:
+
+    st.session_state.total_dech = storage.getItem("stored_total_dech")
+    if st.session_state.total_dech is None:
+        st.session_state.total_dech = 100.0
+    st.session_state.select_totalhd =storage.getItem("stored_select_totalhd") 
+    if st.session_state.select_totalhd is None:
+        st.session_state.select_totalhd = "80-20"
+
+    df_json = storage.getItem("stored_df_non_planifie") 
+    if df_json: 
+        st.session_state.df_non_planifie = pd.read_json(StringIO(df_json), orient="split")
+
+    st.session_state.restored = True
 
 # ---------------------------------------------------------------------------
 # Config page
@@ -338,7 +369,7 @@ col_table, col_chart = st.columns([1, 1], gap="large")
 with col_table:
     st.dataframe(
         style_modality(summary_df.iloc[:-1]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config=NUM_COL_CONFIG,
     )
@@ -353,7 +384,7 @@ with col_table:
 
 with col_chart:
     chart_data = summary_df.iloc[:-1].set_index("Modalité")[["HETD", "HETP"]]
-    st.bar_chart(chart_data, use_container_width=True, stack=False)
+    st.bar_chart(chart_data, width='stretch', stack=False)
 
 # ---------------------------------------------------------------------------
 # Section 2 — Téléchargement Excel
@@ -370,7 +401,7 @@ st.download_button(
     data=excel_bytes,
     file_name=default_name,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True,
+    width='stretch',
 )
 
 # ---------------------------------------------------------------------------
@@ -449,7 +480,7 @@ with tab_mod:
     st.caption(f"{len(df_mod)} séance(s) — {df_mod['Durée (h)'].sum():.2f} h — {df_mod['HETD (h)'].sum():.2f} HETD — {df_mod['HETP (h)'].sum():.2f} HETP")
     st.dataframe(
         style_modality(df_mod),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config=NUM_COL_CONFIG,
     )
@@ -459,7 +490,7 @@ with tab_cours:
     course_summary = build_course_summary(df)
 
     st.subheader("Résumé par cours")
-    st.dataframe(course_summary, use_container_width=True, hide_index=True, column_config=NUM_COL_CONFIG)
+    st.dataframe(course_summary, width='stretch', hide_index=True, column_config=NUM_COL_CONFIG)
 
     st.subheader("Détail d'un cours")
     course_names = course_summary["Nom"].tolist()
@@ -487,7 +518,7 @@ with tab_cours:
 
         st.dataframe(
             style_modality(df_course),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config=NUM_COL_CONFIG,
         )
@@ -500,11 +531,11 @@ with tab_filiere:
 
     with col_fs:
         st.subheader("Récapitulatif par filière")
-        st.dataframe(fil_summary, use_container_width=True, hide_index=True, column_config=NUM_COL_CONFIG)
+        st.dataframe(fil_summary, width='stretch', hide_index=True, column_config=NUM_COL_CONFIG)
 
     with col_fc:
         chart_fil = fil_summary[fil_summary["Filière"] != "—"].set_index("Filière")[["HETD", "HETP"]]
-        st.bar_chart(chart_fil, use_container_width=True, stack=False)
+        st.bar_chart(chart_fil, width='stretch', stack=False)
 
     st.subheader("Détail d'une filière")
     all_fil_options = fil_summary["Filière"].tolist()
@@ -538,11 +569,11 @@ with tab_filiere:
                 promo_grp["Heures"] = promo_grp["Heures"].round(2)
                 promo_grp["HETD"]   = promo_grp["HETD"].round(2)
                 promo_grp["HETP"]   = promo_grp["HETP"].round(2)
-                st.dataframe(promo_grp, use_container_width=True, hide_index=True, column_config=NUM_COL_CONFIG)
+                st.dataframe(promo_grp, width='stretch', hide_index=True, column_config=NUM_COL_CONFIG)
 
         st.dataframe(
             style_modality(df_fil),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config=NUM_COL_CONFIG,
         )
@@ -551,7 +582,7 @@ with tab_filiere:
 with tab_pdc:
     df_pdc = df.copy()
     df_pdc["Nom"] = df_pdc["Nom"].apply(normalize_course_name)
-    #st.dataframe(df_pdc, use_container_width=True, hide_index=True, column_config=NUM_COL_CONFIG)
+    #st.dataframe(df_pdc, width='stretch', hide_index=True, column_config=NUM_COL_CONFIG)
     df_pdc = df_pdc.rename(columns={
     "HETP (h)": "HETP",
     "HETD (h)": "HETD",
@@ -559,6 +590,8 @@ with tab_pdc:
     "Modalité": "Activité"
     })
 
+    # Plan de charge attendu
+    st.subheader("1) Plan de charge attendu")
     col1, col2, col3 = st.columns(3)
     with col1:
         comment = '''total_hd = st.number_input(
@@ -568,49 +601,115 @@ with tab_pdc:
             format="%.2f"
         )'''
         statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
+        statut_courant = st.session_state.select_totalhd
+
         statut = st.selectbox(
            "Total des heures dues au statut (en HETP), sans les décharges", 
            options=statuts, 
+           index=list(statuts.keys()).index(statut_courant),
            key="select_totalhd")
-        total_hd = float(statuts[statut])
-
+        
+        total_hd = float(statuts[st.session_state.select_totalhd])
+        storage.setItem( "stored_select_totalhd", st.session_state.select_totalhd) 
+        
     with col2:
         total_dech = st.number_input(
             "Total des décharges (en HETP)", 
-            value=100.0, 
+            value=float(st.session_state.total_dech), 
             step=0.5,
-            format="%.2f"
+            format="%.2f",
+            #key="total_dech"
         )
+        storage.setItem( "stored_total_dech", total_dech)
 
     total_htodo = total_hd - total_dech
     st.write("Total des heures attendues (en HETP) :", total_htodo)
 
     st.markdown("---")
 
+
+    # ---- Activités non planifiées ----
+    st.subheader("2) Activités non planifiées")
+    # -----------
+    st.markdown("""Si vous le souhaitez, entrez ici vos activités non planifiées, non récupérables à partir de ADE.
+                    
+⚠️ La colonne Quantité attend un nombre (nombre de suivis...) ; certaines activités peuvent être fractionnées (par exemple Projet E4 avec plusieurs suiveurs.)""")
+  
+    with st.expander("Activités non planifiées", expanded=False):
+        if "df_non_planifie" not in st.session_state:
+            st.session_state.df_non_planifie = pd.DataFrame( index=["Suivis stages E3/E4", "Suivis stages E5", "Suivis apprentis E3/E4FD",
+                                                "Suivis apprentis E5", "Projet interne E4", "Projet interne E3",
+                                                "Tremplin recherche", "Dépassement de forfait", "Autre (somme en HETP)"], 
+                                            columns=["Quantité", "Tarif/unité", "HETP"])
+            tarifs = [2, 5, 12, 9, 35, 12.5, 15, 1, 1]
+            st.session_state.df_non_planifie["Quantité"] = 0.0
+            st.session_state.df_non_planifie["Tarif/unité"] = tarifs
+            st.session_state.df_non_planifie["HETP"] = 0
+
+        #st.session_state.df_non_planifie["Quantité"] = st.session_state.df_non_planifie["Quantité"].astype(float)
+        edited = st.data_editor(
+            st.session_state.df_non_planifie,
+            key="non_planifie",
+            column_config={
+                "Quantité": st.column_config.NumberColumn(
+                                min_value=0.0,
+                                format="%.2f"),
+                "Tarif/unité": st.column_config.NumberColumn(disabled=True),
+                "HETP": st.column_config.NumberColumn(disabled=True)
+            }
+        )
+
+        edited["HETP"] = edited["Quantité"]*edited["Tarif/unité"]
+
+        # Sauvegarde et rerun
+        if not edited.equals(st.session_state.df_non_planifie):
+            st.session_state.df_non_planifie = edited
+            #storage.deleteItem( "stored_df_non_planifie" )
+            storage.setItem( "stored_df_non_planifie", st.session_state.df_non_planifie.to_json( orient="split" ), )
+            time.sleep(1.5)
+            st.rerun()
+
+    # -----------
+
+    st.subheader("3) Plans de charge réalisés HETP ou HETD")
     tab_hetp, tab_hetd = st.tabs(["HETP", "HETD"])
         
     with tab_hetp:
-        st.subheader("Pdc HETP")
+        st.subheader("PdC HETP")
         try:
             df_hetp = compute_pdc_rea(df_pdc, "HETP")
-            st.dataframe(df_hetp, use_container_width=True, height='content')
+            df_hetp['Quantité'] = 0
+            df_hetp['Total (HETP)'] = df_hetp.sum(axis=1)
+            idx = df_hetp.index.tolist()
+            for index, row in st.session_state.df_non_planifie.iterrows():
+                if row['HETP'] != 0:
+                    L = len(df_hetp)
+                    df_hetp.loc[L, 'Quantité'] = row['Quantité']
+                    df_hetp.loc[L, 'Total (HETP)'] = row['HETP']
+                    idx.append(index)
+            df_hetp.index = idx
+            df_hetp = df_hetp.fillna(0)  
+            ligne_total = df_hetp.sum(axis=0)
+            df_hetp.loc[len(df_hetp)] = ligne_total
+            idx.append('Total')
+            df_hetp.index = idx
+            st.dataframe(df_hetp, width='stretch', height='content')
         except KeyError:
             st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
 
-    pd.set_option('display.precision', 2)
     df_hetd = df_hetp.apply(lambda x: x*2/3).rename(index={'Total (HETP)': 'Total (HETD)'}, 
                                                     columns={'Total (HETP)': 'Total (HETD)'})
             
     with tab_hetd:
-        st.subheader("Pdc HETD")
+        st.subheader("PdC HETD")
         try:
             #df_hetd = compute_pdc_rea(df_pdc, "HETD")
-            st.dataframe(df_hetd, use_container_width=True, height='content')
+            st.dataframe(df_hetd, width='stretch', height='content')
         except KeyError:
             st.error("La colonne 'HETD' est introuvable dans le fichier fourni.")
 
-    total_hreal_hetp = df_hetp.loc['Total (HETP)', 'Total (HETP)']
-    total_hreal_hetd = df_hetd.loc['Total (HETD)', 'Total (HETD)'] 
+    total_hreal_hetp = df_hetp.loc['Total', 'Total (HETP)']
+    total_hreal_hetd = df_hetd.loc['Total', 'Total (HETD)']
     st.write("Total des heures réalisées : ", round(total_hreal_hetp,2), ' HETP, soit ', round(total_hreal_hetd,2), 'HETD.')
 
     # Calcul des heures complémentaires
@@ -629,8 +728,8 @@ with tab_pdc:
 
             
     # --- Extraction des totaux ---
-    total_hreal_hetp = df_hetp.loc['Total (HETP)', 'Total (HETP)']
-    total_hreal_hetd = df_hetd.loc['Total (HETD)', 'Total (HETD)'] 
+    total_hreal_hetp = df_hetp.loc['Total', 'Total (HETP)']
+    total_hreal_hetd = df_hetd.loc['Total', 'Total (HETD)'] 
 
     # Hypothèse : total_htodo est calculé au préalable (ex: total_hd - total_dech)
     total_hcomp_hetp = total_hreal_hetp - total_htodo
@@ -696,6 +795,6 @@ unsafe_allow_html=True
         
         # Un encadré vert (st.success) pour valoriser le gain
         st.success(f"""
-        **Rémunération attendue  : {remu:.2f} €**, *soit l'équivalent de **{remu_HETD:.2f} HETD** (sur la base de {TARIF_HETD_UNIV:.2f}€ / heure de TD universitaire).*
+        **Rémunération attendue  : {remu:.2f} €**, *soit l'équivalent de **{remu_HETD:.2f} HETD UGE** (sur la base de {TARIF_HETD_UNIV:.2f}€ / heure de TD universitaire).*
         """)
 

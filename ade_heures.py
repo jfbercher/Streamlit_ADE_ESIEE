@@ -240,7 +240,7 @@ def compute_pdc_rea(df_input, out_mode='HETP'):
         aggfunc=['sum'], 
         fill_value=0, 
         values=[out_mode], 
-        margins=True, 
+        margins=False, 
         margins_name=f'Total ({out_mode})'
     )
     # Nettoyage des multi-index colonnes
