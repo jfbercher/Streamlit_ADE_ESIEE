@@ -201,6 +201,8 @@ def build_filiere_summary(df):
 
 
 _COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
+_EPIGEP_RE = re.compile(r'\s*\(EPIG[^)]*\)', re.IGNORECASE)
+
 
 def normalize_course_name(name):
     """Supprime les suffixes de groupe en fin de nom (TP1, TP2, C1, C2, TD1…)."""
@@ -239,7 +241,7 @@ def make_excel_bytes(records):
     return buf.read()
 
 
-# Column config partagé : forcer 2 décimales sur toutes les colonnes numériques
+# Column config partagé 
 NUM_COL_CONFIG = {
     "Durée (h)":  st.column_config.NumberColumn(format="%.2f"),
     "HETD (h)":   st.column_config.NumberColumn(format="%.2f"),
@@ -411,7 +413,69 @@ st.download_button(
 st.markdown("---")
 st.header("🔍 Explorer les séances")
 
-tab_mod, tab_cours, tab_filiere, tab_pdc = st.tabs(["Par modalité", "Par nom de cours", "Par filière", "Votre PdC réalisé"])
+st.markdown("""
+<style>
+button[data-baseweb="tab"] {
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
+    padding: 16px 32px !important;
+    border-radius: 8px 8px 0 0 !important;
+    background-color: #f0f2f6 !important;
+    color: #444 !important;
+    margin-right: 4px !important;
+    border: 1px solid #d0d3da !important;
+    border-bottom: none !important;
+    line-height: 1.2 !important;
+}
+button[data-baseweb="tab"] p,
+button[data-baseweb="tab"] span {
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
+}
+button[data-baseweb="tab"]:hover {
+    background-color: #dde1ea !important;
+    color: #111 !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    background-color: #ffffff !important;
+    color: #1f77b4 !important;
+    border-top: 3px solid #1f77b4 !important;
+    border-left: 1px solid #d0d3da !important;
+    border-right: 1px solid #d0d3da !important;
+}
+/* Sous-onglets (HETP/HETD...) : annuler les styles du 1er niveau */
+div[role="tabpanel"] button[data-baseweb="tab"] p,
+div[role="tabpanel"] button[data-baseweb="tab"] span {
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+}
+div[role="tabpanel"] button[data-baseweb="tab"] {
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+    padding: 6px 12px !important;
+    border-radius: 0 !important;
+    background-color: transparent !important;
+    color: inherit !important;
+    margin-right: 0 !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+}
+div[role="tabpanel"] button[data-baseweb="tab"]:hover {
+    background-color: transparent !important;
+    color: inherit !important;
+}
+div[role="tabpanel"] button[data-baseweb="tab"][aria-selected="true"] {
+    background-color: transparent !important;
+    color: #1f77b4 !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: 2px solid #1f77b4 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+tab_mod, tab_cours, tab_filiere, tab_pdc, tab_edutime = st.tabs(["Par modalité", "Par nom de cours", "Par filière", "Votre PdC réalisé", "Edutime"])
 
 # ---- Tab : Par modalité ----
 with tab_mod:
@@ -614,13 +678,13 @@ with tab_pdc:
         
     with col2:
         total_dech = st.number_input(
-            "Total des décharges (en HETP)", 
-            value=float(st.session_state.total_dech), 
+            "Total des décharges (en HETP)",
+            value=float(st.session_state.total_dech),
             step=0.5,
             format="%.2f",
-            #key="total_dech"
+            key="total_dech",
         )
-        storage.setItem( "stored_total_dech", total_dech)
+        storage.setItem( "stored_total_dech", st.session_state.total_dech)
 
     total_htodo = total_hd - total_dech
     st.write("Total des heures attendues (en HETP) :", total_htodo)
@@ -639,7 +703,7 @@ with tab_pdc:
         if "df_non_planifie" not in st.session_state:
             st.session_state.df_non_planifie = pd.DataFrame( index=["Suivis stages E3/E4", "Suivis stages E5", "Suivis apprentis E3/E4FD",
                                                 "Suivis apprentis E5", "Projet interne E4", "Projet interne E3",
-                                                "Tremplin recherche", "Dépassement de forfait", "Autre (somme en HETP)"], 
+                                                "Tremplin recherche", "Dépassement de forfait", "Autre (somme en HETP)"],
                                             columns=["Quantité", "Tarif/unité", "HETP"])
             tarifs = [2, 5, 12, 9, 35, 12.5, 15, 1, 1]
             st.session_state.df_non_planifie["Quantité"] = 0.0
@@ -797,4 +861,162 @@ unsafe_allow_html=True
         st.success(f"""
         **Rémunération attendue  : {remu:.2f} €**, *soit l'équivalent de **{remu_HETD:.2f} HETD UGE** (sur la base de {TARIF_HETD_UNIV:.2f}€ / heure de TD universitaire).*
         """)
+
+# ---- Tab : Edutime ----
+with tab_edutime:
+    st.info('💡 Dans Edutime : "Mes Services" → "Réalisé" → "Cette année universitaire" → "Appliquer les filtres" → "Exporter". Utiliser le fichier CSV résultant.')
+
+    uploaded_edu = st.file_uploader(
+        "Choisissez votre fichier CSV Edutime",
+        type=["csv"],
+        key="edutime_csv",
+    )
+
+    if uploaded_edu is not None:
+        try:
+            df_edu = pd.read_csv(uploaded_edu, sep=";", decimal=',')
+
+            # Nettoyer Cours : supprimer (EPIG...) 
+            # Sauvegarder quelles lignes étaient des vrais cours planifiés (avaient EPIG)
+            has_epig_mask = df_edu['Cours'].apply(
+                lambda v: bool(_EPIGEP_RE.search(str(v))) if pd.notna(v) else False
+            )
+            df_edu['Cours'] = df_edu['Cours'].apply(
+                lambda v: _EPIGEP_RE.sub('', str(v)).strip() if pd.notna(v) and str(v).strip() != '' else None
+            )
+            mask_empty = df_edu['Cours'].isna() | (df_edu['Cours'] == '')
+            df_edu.loc[mask_empty, 'Cours'] = df_edu.loc[mask_empty, 'Activité']
+
+            # Statut / décharges — pré-remplis depuis session_state (PdC réalisé)
+            statuts = {'80-20': 400, '100-0': 500, '60-40': 300, 'MC UGE': 288}
+            statut_courant = st.session_state.get('select_totalhd', '80-20')
+            col_edu1, col_edu2, col_edu3 = st.columns(3)
+            with col_edu1:
+                statut_edu = st.selectbox(
+                    "Total des heures dues au statut (en HETP), sans les décharges",
+                    options=statuts,
+                    index=list(statuts.keys()).index(statut_courant),
+                    key="select_totalhd_edu",
+                )
+                total_hd_edu = float(statuts[statut_edu])
+            with col_edu2:
+                total_dech_edu = st.number_input(
+                    "Total des décharges (en HETP)",
+                    value=float(st.session_state.get('total_dech', 100.0)),
+                    step=0.5,
+                    format="%.2f",
+                )
+            total_htodo_edu = total_hd_edu - total_dech_edu
+            with col_edu3:
+                st.metric("Heures attendues (HETP)", f"{total_htodo_edu:.1f}")
+
+            tab_hetp_edu, tab_hetd_edu = st.tabs(["HETP", "HETD"])
+
+            with tab_hetp_edu:
+                st.subheader("PdC HETP (Edutime)")
+                try:
+                    df_hetp_edu = compute_pdc_rea(df_edu, "HETP")
+                    df_hetp_edu['Total (HETP)'] = df_hetp_edu.sum(axis=1)
+                    df_hetp_edu = df_hetp_edu.fillna(0)
+                    idx_edu = df_hetp_edu.index.tolist()
+                    ligne_total_edu = df_hetp_edu.sum(axis=0)
+                    df_hetp_edu.loc[len(df_hetp_edu)] = ligne_total_edu
+                    idx_edu.append('Total')
+                    df_hetp_edu.index = idx_edu
+                    st.dataframe(df_hetp_edu, width='stretch')
+                except KeyError:
+                    st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
+
+            df_hetd_edu = df_hetp_edu.apply(lambda x: x * 2 / 3).rename(
+                columns={'Total (HETP)': 'Total (HETD)'}
+            )
+
+            with tab_hetd_edu:
+                st.subheader("PdC HETD (Edutime)")
+                st.dataframe(df_hetd_edu, width='stretch')
+
+            total_hreal_hetp_edu = df_hetp_edu.loc['Total', 'Total (HETP)']
+            total_hreal_hetd_edu = df_hetd_edu.loc['Total', 'Total (HETD)']
+            total_hcomp_hetp_edu = total_hreal_hetp_edu - total_htodo_edu
+            total_hcomp_hetd_edu = total_hcomp_hetp_edu * 2 / 3
+
+            st.write("Total des heures réalisées :", round(total_hreal_hetp_edu, 2), "HETP, soit", round(total_hreal_hetd_edu, 2), "HETD.")
+
+            st.markdown("#### Synthèse des Heures")
+
+            col_real_edu, col_comp_edu = st.columns(2)
+            with col_real_edu:
+                st.metric(
+                    label="⏳ Heures Réalisées",
+                    value=f"{total_hreal_hetp_edu:.2f} HETP",
+                    delta=f"{total_hreal_hetd_edu:.2f} HETD",
+                    delta_color="off",
+                )
+            with col_comp_edu:
+                color_inv_edu = "normal" if total_hcomp_hetp_edu >= 0 else "inverse"
+                st.metric(
+                    label="➕ Heures Complémentaires",
+                    value=f"{total_hcomp_hetp_edu:.2f} HETP",
+                    delta=f"{total_hcomp_hetd_edu:.2f} HETD",
+                    delta_color=color_inv_edu,
+                )
+
+            if total_hcomp_hetp_edu > 0:
+                TARIF_HETP = 39.01
+                TARIF_HETD_UNIV = 43.50
+                TARIF_HETP_UNIV = TARIF_HETD_UNIV / 1.5
+                remu_edu = (min(200, total_hcomp_hetp_edu) * TARIF_HETP +
+                            max(0, total_hcomp_hetp_edu - 200) * TARIF_HETP_UNIV)
+                remu_HETD_edu = remu_edu / TARIF_HETD_UNIV
+                st.markdown("#### Rémunération")
+                st.success(f"""
+                **Rémunération attendue : {remu_edu:.2f} €**, *soit l'équivalent de **{remu_HETD_edu:.2f} HETD UGE** (sur la base de {TARIF_HETD_UNIV:.2f}€ / heure de TD universitaire).*
+                """)
+
+            # ---- Comparaison ADE ↔ Edutime ----
+            st.markdown("---")
+            st.subheader("🔍 Comparaison (en HETP) ADE ↔ Edutime (cours planifiés)")
+
+            ade_by_cours = (
+                df.assign(Cours=df['Nom'].apply(normalize_course_name))
+                .groupby('Cours')['HETP (h)'].sum()
+                .round(2)
+            )
+            edu_by_cours = (
+                df_edu[has_epig_mask]
+                .groupby('Cours')['HETP'].sum()
+                .round(2)
+            )
+
+            comp = pd.DataFrame({'ADE': ade_by_cours, 'Edutime': edu_by_cours}).fillna(0)
+            comp['Δ (ADE−Edu)'] = (comp['ADE'] - comp['Edutime']).round(2)
+            # supprimer lignes à zéro pour les deux
+            comp = comp[(comp['ADE'] != 0) | (comp['Edutime'] != 0)]
+            comp = comp.sort_index()
+            total_comp = pd.DataFrame({
+                'ADE': [round(comp['ADE'].sum(), 2)],
+                'Edutime': [round(comp['Edutime'].sum(), 2)],
+                'Δ (ADE−Edu)': [round(comp['Δ (ADE−Edu)'].sum(), 2)],
+            }, index=['Total'])
+            comp = pd.concat([comp, total_comp])
+
+            def _style_comp(df_s):
+                styles = pd.DataFrame('', index=df_s.index, columns=df_s.columns)
+                mask_delta = df_s['Δ (ADE−Edu)'].abs() > 0.01
+                styles.loc[mask_delta, 'Δ (ADE−Edu)'] = 'background-color: #ffe0e0; font-weight: bold'
+                styles.loc['Total'] = 'font-weight: bold'
+                return styles
+
+            st.dataframe(
+                comp.style.apply(_style_comp, axis=None),
+                width='stretch',
+                column_config={
+                    'ADE':        st.column_config.NumberColumn(format="%.2f"),
+                    'Edutime':    st.column_config.NumberColumn(format="%.2f"),
+                    'Δ (ADE−Edu)': st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+
+        except Exception as e:
+            st.error(f"Erreur lors de la lecture du fichier : {e}")
 
