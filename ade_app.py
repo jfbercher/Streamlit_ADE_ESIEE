@@ -39,7 +39,7 @@ from ade_heures import (
 ANNEES = {'2025-2026':1, '2026-2027':2}
 CURRENT_YEAR = "2025-2026"
 statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
-activites_non_planifiees = {"Suivis stages E3/E4":2, "Suivis stages E5":5, "Suivis apprentis E3/E4FD":12,
+activites_non_planifiees = {"Décharge (HETP)":1, "Suivis stages E3/E4":2, "Suivis stages E5":5, "Suivis apprentis E3/E4FD":12,
                                         "Suivis apprentis E5":9, "Projet interne E4":35, "Projet interne E3":1,
                                         "Tremplin recherche":15, "Dépassement de forfait":1, "Autre (somme en HETP)":1}
 
@@ -126,7 +126,7 @@ def get_ressource_from_ADE(RESSOURCE, current_year=None):
         st.stop()
     else:
         st.session_state.loaded_ressource += 1
-        st.write("Ical chargé", st.session_state.loaded_ressource)
+        #st.write("Ical chargé", st.session_state.loaded_ressource)
     
     return response.content
 
@@ -470,7 +470,7 @@ st.download_button(
 # ---------------------------------------------------------------------------
 
 st.markdown("---")
-st.header("🔍 Explorer les séances")
+st.header("🔍 Explorer")
 
 st.markdown("""
 <style>
@@ -745,9 +745,14 @@ with tab_pdc:
         )
         storage.setItem( "stored_total_dech", total_dech)
         st.session_state.total_dech = total_dech
+        if "df_non_planifie" in st.session_state:
+            st.session_state.df_non_planifie.loc["Décharge (HETP)", "Quantité"] = total_dech
 
     total_htodo = total_hd - total_dech
-    st.write("Total des heures attendues (en HETP) :", total_htodo)
+    with st.container(border=True):
+        st.markdown("""- Total des heures attendues au statut (en HETP) : {total_hd}
+- Total des décharges (en HETP) : {total_dech}
+- Total à effectuer après décharges (en HETP) : {total_htodo}""".format(total_hd=total_hd, total_dech=total_dech, total_htodo=total_htodo), unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -782,8 +787,8 @@ with tab_pdc:
 
         st.markdown(f"**Total des heures non planifiées (en HETP)** : {edited['HETP'].sum():.2f}")
 
-        st.info("**Projets E3**: Entrez directement la somme des HETP correspondantes, qui dépend du nombre de projets suivis et dans chacun du nombre d'élèves. Si plusieurs suiveurs, ajustez en fonction des prorata de suivis. \n\n" \
-        "👉🏼 Formule: Par suivi N_HETP = 8 + .5*NbreSemaines*NbreEtudiants (en 2025-26, NbreSemaines=7)")
+        st.info("**Décharges**: Entrez directement la somme des HETP correspondantes. \n\n**Projets E3**: Entrez directement la somme des HETP correspondantes, qui dépend du nombre de projets suivis et dans chacun du nombre d'élèves. Si plusieurs suiveurs, ajustez en fonction des prorata de suivis. \n\n" \
+        "👉🏼 Formule: Par suivi N_HETP = 8 + 0.5\*NbreSemaines\*NbreEtudiants (en 2025-26, NbreSemaines=7)")
 
         edited["HETP"] = edited["Quantité"]*edited["Tarif/unité"]
 
@@ -875,7 +880,7 @@ Par exemple des actvités réalisées dans l'UGE mais Hors-ESIEE, et qui ne conc
     st.write("Total des heures réalisées : ", round(total_hreal_hetp,2), ' HETP, soit ', round(total_hreal_hetd,2), 'HETD.')
 
     # Calcul des heures complémentaires
-    total_hcomp_hetp =  total_hreal_hetp - total_htodo
+    total_hcomp_hetp =  total_hreal_hetp - total_hd
     total_hcomp_hetd = total_hcomp_hetp * 2 / 3
 
 
@@ -893,8 +898,7 @@ Par exemple des actvités réalisées dans l'UGE mais Hors-ESIEE, et qui ne conc
     total_hreal_hetp = df_hetp.loc['Total', 'Total (HETP)']
     total_hreal_hetd = df_hetd.loc['Total', 'Total (HETD)'] 
 
-    # Hypothèse : total_htodo est calculé au préalable (ex: total_hd - total_dech)
-    total_hcomp_hetp = total_hreal_hetp - total_htodo
+    total_hcomp_hetp = total_hreal_hetp - total_hd
     total_hcomp_hetd = total_hcomp_hetp * 2 / 3
 
     st.markdown("#### Synthèse des Heures")
@@ -1002,7 +1006,7 @@ with tab_edutime:
 
             
             with col_edu2:
-                st.metric("Heures attendues (HETP)", f"{total_hd_edu:.1f}")
+                st.metric("Heures attendues au statut (HETP)", f"{total_hd_edu:.1f}")
 
             tab_hetp_edu, tab_hetd_edu = st.tabs(["HETP", "HETD"])
 
@@ -1016,6 +1020,8 @@ with tab_edutime:
                 df_hetp_edu['Total (HETP)'] = df_hetp_edu.sum(axis=1)
                 df_hetp_edu = df_hetp_edu.fillna(0)
                 idx_edu = df_hetp_edu.index.tolist()
+                if "Décharge (HETP)" in df_hetp_edu.columns:  # Suppression colonne disgracieuse Total conservé
+                    df_hetp_edu.drop(columns=['Décharge (HETP)'], inplace=True)
                 ligne_total_edu = df_hetp_edu.sum(axis=0)
                 df_hetp_edu.loc[len(df_hetp_edu)] = ligne_total_edu
                 idx_edu.append('Total')
