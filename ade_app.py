@@ -250,6 +250,7 @@ def build_filiere_summary(df):
 
 _COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
 _EP_RE = re.compile(r'\s*\(EP[^)]*\)', re.IGNORECASE)
+_PROJET_INTERNE_RE = re.compile(r'Projet\s+interne\s+(E[34])', re.IGNORECASE)
 
 
 def normalize_course_name(name):
@@ -344,7 +345,7 @@ with col_ou:
     st.markdown("<div style='text-align:center'> <strong><br><br>OU</strong> </div>", unsafe_allow_html=True) 
 
 with col_ressource:
-    value = storage.getItem("stored_ressource")
+    value = storage.getItem("stored_RESSOURCE")
     RESSOURCE = st.text_input(
         "Entrez votre numéro de ressource ADE (voir le numéro dans l'URL générée via export agenda dans ADE)",
         value = value if value else "",
@@ -743,6 +744,7 @@ with tab_pdc:
             #key="total_dech"
         )
         storage.setItem( "stored_total_dech", total_dech)
+        st.session_state.total_dech = total_dech
 
     total_htodo = total_hd - total_dech
     st.write("Total des heures attendues (en HETP) :", total_htodo)
@@ -781,7 +783,7 @@ with tab_pdc:
         st.markdown(f"**Total des heures non planifiées (en HETP)** : {edited['HETP'].sum():.2f}")
 
         st.info("**Projets E3**: Entrez directement la somme des HETP correspondantes, qui dépend du nombre de projets suivis et dans chacun du nombre d'élèves. Si plusieurs suiveurs, ajustez en fonction des prorata de suivis. \n\n" \
-        "👉🏼 Formule: Par suivi N_HETP = 8 + .5\*NbreSemaines\*NbreEtudiants (en 2025-26, NbreSemaines=7)")
+        "👉🏼 Formule: Par suivi N_HETP = 8 + .5*NbreSemaines*NbreEtudiants (en 2025-26, NbreSemaines=7)")
 
         edited["HETP"] = edited["Quantité"]*edited["Tarif/unité"]
 
@@ -975,8 +977,8 @@ with tab_edutime:
         try:
             df_edu = pd.read_csv(io.BytesIO(st.session_state.edutime_csv_data), sep=";", decimal=',')
 
-            # Nettoyer Cours : supprimer (EPIG...) 
-            # Sauvegarder quelles lignes étaient des vrais cours planifiés (avaient EPIG)
+            # Nettoyer Cours : supprimer (EP...) 
+            # Sauvegarder quelles lignes étaient des vrais cours planifiés (avaient EP..)
             has_ep_mask = df_edu['Cours'].apply(
                 lambda v: bool(_EP_RE.search(str(v))) if pd.notna(v) else False
             )
@@ -997,10 +999,20 @@ with tab_edutime:
                     key="select_totalhd_edu",
                 )
                 total_hd_edu = float(statuts[statut_edu])
-                total_htodo_edu = total_hd_edu
-            
+
             with col_edu2:
-                st.metric("Heures attendues au statut (HETP)", f"{total_hd_edu:.1f}")
+                total_dech_edu = st.number_input(
+                    "Total des décharges (en HETP)",
+                    value=float(st.session_state.get('total_dech', 100.0)),
+                    step=0.5,
+                    format="%.2f",
+                    key="total_dech_edu",
+                )
+
+            total_htodo_edu = total_hd_edu - total_dech_edu
+
+            with col_edu3:
+                st.metric("Heures attendues (HETP)", f"{total_htodo_edu:.1f}")
 
             tab_hetp_edu, tab_hetd_edu = st.tabs(["HETP", "HETD"])
 
@@ -1069,13 +1081,14 @@ with tab_edutime:
 
             # ---- Comparaison ADE ↔ Edutime ----
             st.markdown("---")
-            st.subheader("🔍 Comparaison (en HETP) ADE ↔ Edutime (Enseignements ESIEE **planifiés**)")
+            st.subheader("🔍 Comparaison (en HETP) ADE ↔ Edutime")
 
             ade_by_cours = (
                 df.assign(Cours=df['Nom'].apply(normalize_course_name))
                 .groupby('Cours')['HETP (h)'].sum()
                 .round(2)
             )
+            ade_ics_cours = set(ade_by_cours.index)  # noms cours ADE ICS avant ajout non-planifiés
             for index, row in st.session_state.df_non_planifie.iterrows():
                 if row['HETP'] != 0:
                     ade_by_cours.loc[index] = row['HETP']
@@ -1087,48 +1100,79 @@ with tab_edutime:
                         st.warning(f"L'activité ''{activity}' n'est pas présent dans les activités importées d'ADE.")
                     ade_by_cours = ade_by_cours.drop(activity, errors="ignore")
 
+            # Edutime : cours EP + Projet E3/E4 normalisés → "Projet interne E3/E4"
+            _PROJET_COURT_RE = re.compile(r'^Projet\s+(E[34])$', re.IGNORECASE)
+            is_projet_mask = df_edu['Cours'].str.contains(r'Projet.*E[34]', case=False, na=False, regex=True)
+            # noms de cours planifiés (EP) pour le coloriage
+            cours_planifies = ade_ics_cours | set(df_edu[has_ep_mask]['Cours'].unique())
             edu_by_cours = (
-                df_edu[has_ep_mask]
+                df_edu[has_ep_mask | is_projet_mask | mask_empty]
+                .assign(Cours=lambda d: d['Cours'].apply(
+                    lambda v: _PROJET_COURT_RE.sub(r'Projet interne \1', str(v))
+                ))
                 .groupby('Cours')['HETP'].sum()
                 .round(2)
             )
 
-            comp = pd.DataFrame({'ADE': ade_by_cours, 'Edutime': edu_by_cours}).fillna(0)
             comp = pd.concat(
-                {
-                    "ADE": ade_by_cours,
-                    "Edutime": edu_by_cours
-                },
-                axis=1
+                {"ADE": ade_by_cours, "Edutime": edu_by_cours}, axis=1
             ).fillna(0)
-
             comp['Δ (ADE−Edu)'] = (comp['ADE'] - comp['Edutime']).round(2)
-            # supprimer lignes à zéro pour les deux
             comp = comp[(comp['ADE'] != 0) | (comp['Edutime'] != 0)]
             comp = comp.sort_index()
-            total_comp = pd.DataFrame({
+
+            comp_cours = comp[comp.index.isin(cours_planifies)]
+            comp_autres = comp[~comp.index.isin(cours_planifies)]
+
+            COL_CFG = {
+                'ADE':          st.column_config.NumberColumn(format="%.2f"),
+                'Edutime':      st.column_config.NumberColumn(format="%.2f"),
+                'Δ (ADE−Edu)': st.column_config.NumberColumn(format="%.2f"),
+            }
+
+            def _style_section(df_s, bg):
+                styles = pd.DataFrame(f'background-color: {bg}', index=df_s.index, columns=df_s.columns)
+                mask_delta = df_s['Δ (ADE−Edu)'].abs() > 0.01
+                styles.loc[mask_delta, 'Δ (ADE−Edu)'] = f'background-color: {bg}; color: #c0392b; font-weight: bold'
+                total_mask = df_s.index == 'Total'
+                if total_mask.any():
+                    styles.loc[total_mask] = 'background-color: #f0f0f0; font-weight: bold'
+                return styles
+
+            def _add_total(df_s):
+                total = pd.DataFrame({
+                    'ADE': [round(df_s['ADE'].sum(), 2)],
+                    'Edutime': [round(df_s['Edutime'].sum(), 2)],
+                    'Δ (ADE−Edu)': [round(df_s['Δ (ADE−Edu)'].sum(), 2)],
+                }, index=['Total'])
+                return pd.concat([df_s, total])
+
+            st.markdown("**📘 Cours planifiés**")
+            df_c = _add_total(comp_cours)
+            st.dataframe(
+                df_c.style.apply(lambda d: _style_section(d, '#e8f4fd'), axis=None),
+                width='stretch', height='content',
+                column_config=COL_CFG,
+            )
+
+            st.markdown("**📙 Activités non planifiées**")
+            df_a = _add_total(comp_autres)
+            st.dataframe(
+                df_a.style.apply(lambda d: _style_section(d, '#fff8e1'), axis=None),
+                width='stretch', height='content',
+                column_config=COL_CFG,
+            )
+
+            # Total global
+            total_global = pd.DataFrame({
                 'ADE': [round(comp['ADE'].sum(), 2)],
                 'Edutime': [round(comp['Edutime'].sum(), 2)],
                 'Δ (ADE−Edu)': [round(comp['Δ (ADE−Edu)'].sum(), 2)],
-            }, index=['Total'])
-            comp = pd.concat([comp, total_comp])
-
-            def _style_comp(df_s):
-                styles = pd.DataFrame('', index=df_s.index, columns=df_s.columns)
-                mask_delta = df_s['Δ (ADE−Edu)'].abs() > 0.01
-                styles.loc[mask_delta, 'Δ (ADE−Edu)'] = 'background-color: #ffe0e0; font-weight: bold'
-                styles.loc['Total'] = 'font-weight: bold'
-                return styles
-
+            }, index=['Total général'])
             st.dataframe(
-                comp.style.apply(_style_comp, axis=None),
-                width='stretch',
-                 height='content',
-                column_config={
-                    'ADE':        st.column_config.NumberColumn(format="%.2f"),
-                    'Edutime':    st.column_config.NumberColumn(format="%.2f"),
-                    'Δ (ADE−Edu)': st.column_config.NumberColumn(format="%.2f"),
-                },
+                total_global.style.apply(lambda d: _style_section(d, '#f0f0f0'), axis=None),
+                width='stretch', height='content',
+                column_config=COL_CFG,
             )
 
         except Exception as e:
