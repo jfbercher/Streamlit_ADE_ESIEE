@@ -227,6 +227,20 @@ def process_events(raw_events):
     return records
 
 
+def get_teacher_name(records):
+    from collections import Counter
+    def split_personnes(s):
+        return re.split(r'(?<=\S)\s+(?=[A-ZÀ-ÖØ-Þ-]+(?:\s+[A-ZÀ-ÖØ-Þ-]+)*\s+[A-Z][a-z])', s)
+    all_teacher_names = []
+    try:
+        for record in records:
+            all_teacher_names.extend(split_personnes(record["description"].split(" | ")[-3]))
+        detected_prof = Counter(all_teacher_names).most_common(1)[0][0]
+    except:
+        return ""
+
+    return detected_prof
+
 # ---------------------------------------------------------------------------
 # Pivot table (pdc réalisé)
 # ---------------------------------------------------------------------------
