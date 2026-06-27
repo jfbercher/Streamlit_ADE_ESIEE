@@ -1000,19 +1000,9 @@ with tab_edutime:
                 )
                 total_hd_edu = float(statuts[statut_edu])
 
+            
             with col_edu2:
-                total_dech_edu = st.number_input(
-                    "Total des décharges (en HETP)",
-                    value=float(st.session_state.get('total_dech', 100.0)),
-                    step=0.5,
-                    format="%.2f",
-                    key="total_dech_edu",
-                )
-
-            total_htodo_edu = total_hd_edu - total_dech_edu
-
-            with col_edu3:
-                st.metric("Heures attendues (HETP)", f"{total_htodo_edu:.1f}")
+                st.metric("Heures attendues (HETP)", f"{total_hd_edu:.1f}")
 
             tab_hetp_edu, tab_hetd_edu = st.tabs(["HETP", "HETD"])
 
@@ -1043,7 +1033,7 @@ with tab_edutime:
 
             total_hreal_hetp_edu = df_hetp_edu.loc['Total', 'Total (HETP)']
             total_hreal_hetd_edu = df_hetd_edu.loc['Total', 'Total (HETD)']
-            total_hcomp_hetp_edu = total_hreal_hetp_edu - total_htodo_edu
+            total_hcomp_hetp_edu = total_hreal_hetp_edu - total_hd_edu
             total_hcomp_hetd_edu = total_hcomp_hetp_edu * 2 / 3
 
             st.write("Total des heures réalisées :", round(total_hreal_hetp_edu, 2), "HETP, soit", round(total_hreal_hetd_edu, 2), "HETD.")
