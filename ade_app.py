@@ -32,9 +32,19 @@ from ade_heures import (
     parse_ics,
     process_events,
     extract_codes,
+    get_teacher_name,
     compute_pdc_rea,
 )
 
+ANNEES = {'2025-2026':1, '2026-2027':2}
+CURRENT_YEAR = "2025-2026"
+statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
+activites_non_planifiees = {"Suivis stages E3/E4":2, "Suivis stages E5":5, "Suivis apprentis E3/E4FD":12,
+                                        "Suivis apprentis E5":9, "Projet interne E4":35, "Projet interne E3":1,
+                                        "Tremplin recherche":15, "Dépassement de forfait":1, "Autre (somme en HETP)":1}
+
+if "edutime_csv_data" not in st.session_state:
+    st.session_state.edutime_csv_data = None
 
 # ---------------------------------------------------------------------------
 # Session restore
@@ -46,14 +56,26 @@ storage.setItem = lambda key, value: old_setItem(key, value, key=key+'_'+str(tim
 old_deleteItem = storage.deleteItem
 storage.deleteItem = lambda key: old_deleteItem(key, key=key+'_'+str(time.time()))
 
+if "loaded_ressource" not in st.session_state:
+    st.session_state.loaded_ressource = 0
+
 if "restored" not in st.session_state:
 
+    st.session_state.RESSOURCE = storage.getItem("stored_RESSOURCE")
+    if st.session_state.RESSOURCE is None:
+        st.session_state.RESSOURCE = ""
     st.session_state.total_dech = storage.getItem("stored_total_dech")
     if st.session_state.total_dech is None:
         st.session_state.total_dech = 100.0
     st.session_state.select_totalhd =storage.getItem("stored_select_totalhd") 
     if st.session_state.select_totalhd is None:
         st.session_state.select_totalhd = "80-20"
+    st.session_state.activities_to_remove = storage.getItem("stored_activities_to_remove")
+    if st.session_state.activities_to_remove is None:
+        st.session_state.activities_to_remove = []
+    st.session_state.stored_selected_year = storage.getItem("stored_selected_year")
+    if st.session_state.stored_selected_year is None:
+        st.session_state.stored_selected_year = CURRENT_YEAR
 
     df_json = storage.getItem("stored_df_non_planifie") 
     if df_json: 
@@ -81,6 +103,32 @@ st.error("🔴 **Version bêta** --- Cet outil est en cours de beta test. Les r�
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@st.cache_data()
+def get_ressource_from_ADE(RESSOURCE, current_year=None):
+
+    if current_year is None:
+        current_year = CURRENT_YEAR
+
+    ProjectId = ANNEES[current_year]
+    StartYear, EndYear = current_year.split("-")
+
+    ical_URL = f"https://edt-consult.univ-eiffel.fr/jsp/custom/modules/plannings/anonymous_cal.jsp?resources={RESSOURCE}&projectId={ProjectId}&calType=ical&startDay=01&startMonth=6&startYear={StartYear}&endDay=31&endMonth=08&endYear={EndYear}"
+    
+    response = requests.get(ical_URL)
+
+    if response.status_code != 200:
+        st.error("Erreur lors du téléchargement de l'agenda ADE : Erreur HTTP " + str(response.status_code) )
+        if response.status_code == 500:
+            st.error("Internal Server Error - Erreur interne du serveur ADE")
+        if response.status_code == 404:
+            st.error("Ressource introuvable")
+        st.stop()
+    else:
+        st.session_state.loaded_ressource += 1
+        st.write("Ical chargé", st.session_state.loaded_ressource)
+    
+    return response.content
 
 def records_to_df(records):
     """Convert list of record dicts to a clean DataFrame."""
@@ -201,7 +249,7 @@ def build_filiere_summary(df):
 
 
 _COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
-_EPIGEP_RE = re.compile(r'\s*\(EPIG[^)]*\)', re.IGNORECASE)
+_EP_RE = re.compile(r'\s*\(EP[^)]*\)', re.IGNORECASE)
 
 
 def normalize_course_name(name):
@@ -272,7 +320,7 @@ def style_modality(df_display):
 # File upload
 # ---------------------------------------------------------------------------
 
-col_ressource, col_ou, col_upload = st.columns([1, 0.2, 1])
+col_ressource, col_annee,col_ou, col_upload = st.columns([1, 0.4, 0.2, 1])
 
 with col_upload:
     uploaded = st.file_uploader(
@@ -280,13 +328,30 @@ with col_upload:
         type=["ics"],
         help="Exportez votre emploi du temps depuis ADE au format iCalendar (.ics)",
     )
+    if uploaded: 
+        st.session_state.RESSOURCE = ""
+
+with col_annee:
+    annee_courante = st.session_state.annee if "annee" in st.session_state else CURRENT_YEAR
+    options = list(ANNEES.keys())
+    st.selectbox("Choisissez une année scolaire", options=options, 
+                 index=list(options).index(annee_courante), 
+                 key="selected_year")
+
+    storage.setItem( "stored_selected_year", st.session_state.selected_year) 
+
 with col_ou:
     st.markdown("<div style='text-align:center'> <strong><br><br>OU</strong> </div>", unsafe_allow_html=True) 
 
 with col_ressource:
+    value = storage.getItem("stored_ressource")
     RESSOURCE = st.text_input(
         "Entrez votre numéro de ressource ADE (voir le numéro dans l'URL générée via export agenda dans ADE)",
+        value = value if value else "",
     )
+    if RESSOURCE:
+        st.session_state.RESSOURCE = RESSOURCE
+        storage.setItem("stored_RESSOURCE", RESSOURCE)
 
 ical = None
 # Déclenchement
@@ -300,20 +365,8 @@ if uploaded is not None:
 
 # si téléchargement depuis ADE
 elif RESSOURCE:
-    ical_URL = (
-        "https://edt-consult.univ-eiffel.fr/jsp/custom/modules/plannings/"
-        f"anonymous_cal.jsp?resources={RESSOURCE}&projectId=1&calType=ical"
-        "&startDay=01&startMonth=6&startYear=2025"
-        "&endDay=31&endMonth=08&endYear=2026"
-    )
 
-    response = requests.get(ical_URL)
-
-    if response.status_code != 200:
-        st.error("Erreur lors du téléchargement de l'agenda ADE.")
-        st.stop()
-
-    ical = response.content
+    ical = get_ressource_from_ADE(RESSOURCE, current_year=st.session_state.selected_year)
 
     uploaded = io.BytesIO(ical)
     uploaded.name = "edt.ics"
@@ -328,6 +381,11 @@ with tempfile.NamedTemporaryFile(suffix=".ics", delete=False) as tmp:
 try:
     raw_events = parse_ics(tmp_path)
     records    = process_events(raw_events)
+    teacher_name = get_teacher_name(records)
+    st.session_state.teacher_name = teacher_name
+    if len(teacher_name) > 0:
+        st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
+
 finally:
     os.unlink(tmp_path)
 
@@ -646,6 +704,13 @@ with tab_filiere:
 with tab_pdc:
     df_pdc = df.copy()
     df_pdc["Nom"] = df_pdc["Nom"].apply(normalize_course_name)
+    if "activities_to_remove" in st.session_state:
+        activities_to_remove = list(set(st.session_state.activities_to_remove))
+        for activity in activities_to_remove:
+            if len(df_pdc["Nom"].str.contains(activity, na=False, regex=False)) == 0:
+                st.warning(f"L'activité ''{activity}' n'est pas présent dans les activités importées d'ADE.")
+            df_pdc = df_pdc[~df_pdc["Nom"].str.contains(activity, na=False, regex=False)]
+
     #st.dataframe(df_pdc, width='stretch', hide_index=True, column_config=NUM_COL_CONFIG)
     df_pdc = df_pdc.rename(columns={
     "HETP (h)": "HETP",
@@ -658,17 +723,10 @@ with tab_pdc:
     st.subheader("1) Plan de charge attendu")
     col1, col2, col3 = st.columns(3)
     with col1:
-        comment = '''total_hd = st.number_input(
-            "Total des heures dues au statut (en HETP), sans les décharges", 
-            value=400.0, 
-            step=0.5,
-            format="%.2f"
-        )'''
-        statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
         statut_courant = st.session_state.select_totalhd
 
         statut = st.selectbox(
-           "Total des heures dues au statut (en HETP), sans les décharges", 
+           "Total des heures dues au statut (en HETP)", 
            options=statuts, 
            index=list(statuts.keys()).index(statut_courant),
            key="select_totalhd")
@@ -682,9 +740,9 @@ with tab_pdc:
             value=float(st.session_state.total_dech),
             step=0.5,
             format="%.2f",
-            key="total_dech",
+            #key="total_dech"
         )
-        storage.setItem( "stored_total_dech", st.session_state.total_dech)
+        storage.setItem( "stored_total_dech", total_dech)
 
     total_htodo = total_hd - total_dech
     st.write("Total des heures attendues (en HETP) :", total_htodo)
@@ -701,13 +759,10 @@ with tab_pdc:
   
     with st.expander("Activités non planifiées", expanded=False):
         if "df_non_planifie" not in st.session_state:
-            st.session_state.df_non_planifie = pd.DataFrame( index=["Suivis stages E3/E4", "Suivis stages E5", "Suivis apprentis E3/E4FD",
-                                                "Suivis apprentis E5", "Projet interne E4", "Projet interne E3",
-                                                "Tremplin recherche", "Dépassement de forfait", "Autre (somme en HETP)"],
+            st.session_state.df_non_planifie = pd.DataFrame( index=list(activites_non_planifiees.keys()), 
                                             columns=["Quantité", "Tarif/unité", "HETP"])
-            tarifs = [2, 5, 12, 9, 35, 12.5, 15, 1, 1]
             st.session_state.df_non_planifie["Quantité"] = 0.0
-            st.session_state.df_non_planifie["Tarif/unité"] = tarifs
+            st.session_state.df_non_planifie["Tarif/unité"] = activites_non_planifiees.values()
             st.session_state.df_non_planifie["HETP"] = 0
 
         #st.session_state.df_non_planifie["Quantité"] = st.session_state.df_non_planifie["Quantité"].astype(float)
@@ -723,7 +778,17 @@ with tab_pdc:
             }
         )
 
+        st.markdown(f"**Total des heures non planifiées (en HETP)** : {edited['HETP'].sum():.2f}")
+
+        st.info("**Projets E3**: Entrez directement la somme des HETP correspondantes, qui dépend du nombre de projets suivis et dans chacun du nombre d'élèves. Si plusieurs suiveurs, ajustez en fonction des prorata de suivis. \n\n" \
+        "👉🏼 Formule: Par suivi N_HETP = 8 + .5\*NbreSemaines\*NbreEtudiants (en 2025-26, NbreSemaines=7)")
+
         edited["HETP"] = edited["Quantité"]*edited["Tarif/unité"]
+
+        # Reset
+        if st.button("Reset", help="Effacer le tableau des heures non planifiées"):
+            del st.session_state.df_non_planifie
+            st.rerun()
 
         # Sauvegarde et rerun
         if not edited.equals(st.session_state.df_non_planifie):
@@ -737,32 +802,62 @@ with tab_pdc:
 
     st.subheader("3) Plans de charge réalisés HETP ou HETD")
     tab_hetp, tab_hetd = st.tabs(["HETP", "HETD"])
-        
+    df_hetp = None
+
     with tab_hetp:
         st.subheader("PdC HETP")
         try:
             df_hetp = compute_pdc_rea(df_pdc, "HETP")
-            df_hetp['Quantité'] = 0
-            df_hetp['Total (HETP)'] = df_hetp.sum(axis=1)
-            idx = df_hetp.index.tolist()
-            for index, row in st.session_state.df_non_planifie.iterrows():
-                if row['HETP'] != 0:
-                    L = len(df_hetp)
-                    df_hetp.loc[L, 'Quantité'] = row['Quantité']
-                    df_hetp.loc[L, 'Total (HETP)'] = row['HETP']
-                    idx.append(index)
-            df_hetp.index = idx
-            df_hetp = df_hetp.fillna(0)  
-            ligne_total = df_hetp.sum(axis=0)
-            df_hetp.loc[len(df_hetp)] = ligne_total
-            idx.append('Total')
-            df_hetp.index = idx
-            st.dataframe(df_hetp, width='stretch', height='content')
         except KeyError:
             st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
+        df_hetp['Quantité'] = 0
+        df_hetp['Total (HETP)'] = df_hetp.sum(axis=1)
+        idx = df_hetp.index.tolist()
+        for index, row in st.session_state.df_non_planifie.iterrows():
+            if row['HETP'] != 0:
+                L = len(df_hetp)
+                df_hetp.loc[L, 'Quantité'] = row['Quantité']
+                df_hetp.loc[L, 'Total (HETP)'] = row['HETP']
+                idx.append(index)
+        df_hetp.index = idx
+        df_hetp = df_hetp.fillna(0)  
+        ligne_total = df_hetp.sum(axis=0)
+        df_hetp.loc[len(df_hetp)] = ligne_total
+        idx.append('Total')
+        df_hetp.index = idx
+        #st.dataframe(df_hetp, width='stretch', height='content')
+        event = st.dataframe(
+            df_hetp,
+            selection_mode="multi-row",
+            on_select="rerun",
+            width='stretch', 
+            height='content',
+            #hide_index=True,
+        )
+        if event.selection.rows:
+            activities_to_remove = list(df_hetp.index[event.selection.rows]) 
+            st.session_state.activities_to_remove.extend(activities_to_remove)
+            st.write(f"Activities to remove: {activities_to_remove}")
+            for activity in activities_to_remove:
+                if sum(df_pdc["Cours"].str.contains(activity, na=False, regex=False)) == 0:
+                    st.warning(f"⚠️ L'activité ''{activity}' n'est pas présente dans les activités importées d'ADE (non planifiée ?)")
 
-    df_hetd = df_hetp.apply(lambda x: x*2/3).rename(index={'Total (HETP)': 'Total (HETD)'}, 
+        b1, b2, b3 = st.columns([1,1,4])
+        with b1:
+            if st.button("Supprimer les lignes sélectionnées", help="""Certaines activités peuvent devoir être neutralisées. 
+Par exemple des actvités réalisées dans l'UGE mais Hors-ESIEE, et qui ne concernent donc pas le PdC réalisé ESIEE."""):
+                st.rerun()
+
+        with b2:
+            if st.button("Restaurer toutes les lignes"):
+                st.session_state.activities_to_remove = []
+                st.rerun()
+
+    if df_hetp is not None:
+        df_hetd = df_hetp.apply(lambda x: x*2/3).rename(index={'Total (HETP)': 'Total (HETD)'}, 
                                                     columns={'Total (HETP)': 'Total (HETD)'})
+    else: # Ceci ne devrait pas arriver, mais juste au cas où... 
+        st.error("Visualiser le PdC HETP avant de visualiser le PdC HETD.")
             
     with tab_hetd:
         st.subheader("PdC HETD")
@@ -771,6 +866,7 @@ with tab_pdc:
             st.dataframe(df_hetd, width='stretch', height='content')
         except KeyError:
             st.error("La colonne 'HETD' est introuvable dans le fichier fourni.")
+
 
     total_hreal_hetp = df_hetp.loc['Total', 'Total (HETP)']
     total_hreal_hetd = df_hetd.loc['Total', 'Total (HETD)']
@@ -871,44 +967,40 @@ with tab_edutime:
         type=["csv"],
         key="edutime_csv",
     )
-
     if uploaded_edu is not None:
+        st.session_state["edutime_csv_data"] = uploaded_edu.getvalue()
+        st.session_state["edutime_csv_name"] = uploaded_edu.name
+
+    if st.session_state.edutime_csv_data is not None:
         try:
-            df_edu = pd.read_csv(uploaded_edu, sep=";", decimal=',')
+            df_edu = pd.read_csv(io.BytesIO(st.session_state.edutime_csv_data), sep=";", decimal=',')
 
             # Nettoyer Cours : supprimer (EPIG...) 
             # Sauvegarder quelles lignes étaient des vrais cours planifiés (avaient EPIG)
-            has_epig_mask = df_edu['Cours'].apply(
-                lambda v: bool(_EPIGEP_RE.search(str(v))) if pd.notna(v) else False
+            has_ep_mask = df_edu['Cours'].apply(
+                lambda v: bool(_EP_RE.search(str(v))) if pd.notna(v) else False
             )
             df_edu['Cours'] = df_edu['Cours'].apply(
-                lambda v: _EPIGEP_RE.sub('', str(v)).strip() if pd.notna(v) and str(v).strip() != '' else None
+                lambda v: _EP_RE.sub('', str(v)).strip() if pd.notna(v) and str(v).strip() != '' else None
             )
             mask_empty = df_edu['Cours'].isna() | (df_edu['Cours'] == '')
             df_edu.loc[mask_empty, 'Cours'] = df_edu.loc[mask_empty, 'Activité']
 
             # Statut / décharges — pré-remplis depuis session_state (PdC réalisé)
-            statuts = {'80-20': 400, '100-0': 500, '60-40': 300, 'MC UGE': 288}
             statut_courant = st.session_state.get('select_totalhd', '80-20')
             col_edu1, col_edu2, col_edu3 = st.columns(3)
             with col_edu1:
                 statut_edu = st.selectbox(
-                    "Total des heures dues au statut (en HETP), sans les décharges",
+                    "Total des heures dues au statut (en HETP)",
                     options=statuts,
                     index=list(statuts.keys()).index(statut_courant),
                     key="select_totalhd_edu",
                 )
                 total_hd_edu = float(statuts[statut_edu])
+                total_htodo_edu = total_hd_edu
+            
             with col_edu2:
-                total_dech_edu = st.number_input(
-                    "Total des décharges (en HETP)",
-                    value=float(st.session_state.get('total_dech', 100.0)),
-                    step=0.5,
-                    format="%.2f",
-                )
-            total_htodo_edu = total_hd_edu - total_dech_edu
-            with col_edu3:
-                st.metric("Heures attendues (HETP)", f"{total_htodo_edu:.1f}")
+                st.metric("Heures attendues au statut (HETP)", f"{total_hd_edu:.1f}")
 
             tab_hetp_edu, tab_hetd_edu = st.tabs(["HETP", "HETD"])
 
@@ -916,16 +1008,18 @@ with tab_edutime:
                 st.subheader("PdC HETP (Edutime)")
                 try:
                     df_hetp_edu = compute_pdc_rea(df_edu, "HETP")
-                    df_hetp_edu['Total (HETP)'] = df_hetp_edu.sum(axis=1)
-                    df_hetp_edu = df_hetp_edu.fillna(0)
-                    idx_edu = df_hetp_edu.index.tolist()
-                    ligne_total_edu = df_hetp_edu.sum(axis=0)
-                    df_hetp_edu.loc[len(df_hetp_edu)] = ligne_total_edu
-                    idx_edu.append('Total')
-                    df_hetp_edu.index = idx_edu
-                    st.dataframe(df_hetp_edu, width='stretch')
                 except KeyError:
                     st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
+                
+                df_hetp_edu['Total (HETP)'] = df_hetp_edu.sum(axis=1)
+                df_hetp_edu = df_hetp_edu.fillna(0)
+                idx_edu = df_hetp_edu.index.tolist()
+                ligne_total_edu = df_hetp_edu.sum(axis=0)
+                df_hetp_edu.loc[len(df_hetp_edu)] = ligne_total_edu
+                idx_edu.append('Total')
+                df_hetp_edu.index = idx_edu
+                st.dataframe(df_hetp_edu, width='stretch')
+
 
             df_hetd_edu = df_hetp_edu.apply(lambda x: x * 2 / 3).rename(
                 columns={'Total (HETP)': 'Total (HETD)'}
@@ -975,20 +1069,39 @@ with tab_edutime:
 
             # ---- Comparaison ADE ↔ Edutime ----
             st.markdown("---")
-            st.subheader("🔍 Comparaison (en HETP) ADE ↔ Edutime (cours planifiés)")
+            st.subheader("🔍 Comparaison (en HETP) ADE ↔ Edutime (Enseignements ESIEE **planifiés**)")
 
             ade_by_cours = (
                 df.assign(Cours=df['Nom'].apply(normalize_course_name))
                 .groupby('Cours')['HETP (h)'].sum()
                 .round(2)
             )
+            for index, row in st.session_state.df_non_planifie.iterrows():
+                if row['HETP'] != 0:
+                    ade_by_cours.loc[index] = row['HETP']
+
+            if "activities_to_remove" in st.session_state:
+                activities_to_remove = list(set(st.session_state.activities_to_remove))
+                for activity in activities_to_remove:
+                    if activity not in ade_by_cours.index:
+                        st.warning(f"L'activité ''{activity}' n'est pas présent dans les activités importées d'ADE.")
+                    ade_by_cours = ade_by_cours.drop(activity, errors="ignore")
+
             edu_by_cours = (
-                df_edu[has_epig_mask]
+                df_edu[has_ep_mask]
                 .groupby('Cours')['HETP'].sum()
                 .round(2)
             )
 
             comp = pd.DataFrame({'ADE': ade_by_cours, 'Edutime': edu_by_cours}).fillna(0)
+            comp = pd.concat(
+                {
+                    "ADE": ade_by_cours,
+                    "Edutime": edu_by_cours
+                },
+                axis=1
+            ).fillna(0)
+
             comp['Δ (ADE−Edu)'] = (comp['ADE'] - comp['Edutime']).round(2)
             # supprimer lignes à zéro pour les deux
             comp = comp[(comp['ADE'] != 0) | (comp['Edutime'] != 0)]
@@ -1010,6 +1123,7 @@ with tab_edutime:
             st.dataframe(
                 comp.style.apply(_style_comp, axis=None),
                 width='stretch',
+                 height='content',
                 column_config={
                     'ADE':        st.column_config.NumberColumn(format="%.2f"),
                     'Edutime':    st.column_config.NumberColumn(format="%.2f"),
