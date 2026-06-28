@@ -95,6 +95,7 @@ st.set_page_config(
 )
 
 st.title("Analyse des heures d'enseignement — ADE")
+
 st.caption("Utilisez votre numéro de ressource ADE ou importez un fichier `.ics` exporté depuis ADE pour obtenir le détail et le récapitulatif de vos heures.")
 
 st.error("🔴 **Version bêta** --- Cet outil est en cours de beta test. Les résultats n'ont pas encore été validés et une vérification de votre part est nécessaire. Merci de signaler toute anomalie sur [le lien suivant](https://docs.google.com/document/d/1QvYGU6BJAivPvYUNZ4nP_qpJm5ZgR8SAdQZUg8VvDrY/edit?usp=sharing).")
@@ -321,7 +322,8 @@ def style_modality(df_display):
 # File upload
 # ---------------------------------------------------------------------------
 
-col_ressource, col_annee,col_ou, col_upload = st.columns([1, 0.4, 0.2, 1])
+col_ressource, col_ressource_help, col_annee,col_ou, col_upload = st.columns([0.8, 0.4, 0.4, 0.2, 1], vertical_alignment="top")
+
 
 with col_upload:
     uploaded = st.file_uploader(
@@ -344,10 +346,24 @@ with col_annee:
 with col_ou:
     st.markdown("<div style='text-align:center'> <strong><br><br>OU</strong> </div>", unsafe_allow_html=True) 
 
+with col_ressource_help:
+    st.text('')
+    st.text('')
+    with st.popover("❓ Comment le trouver ?"):
+        st.markdown("""
+    Le numéro de ressource ADE est situé dans l'URL de votre emploi du temps exporté depuis ADE.
+                    
+    1. Connectez-vous sur [ADE](https://edt-consult.univ-eiffel.fr/direct/).
+    2. Recherchez votre nom.
+    4. Cliquez sur **Export Agenda**.
+    4. Générez l'URL iCalendar.
+    5. Copiez la valeur après `resources=`.
+    """)
+
 with col_ressource:
     value = storage.getItem("stored_RESSOURCE")
     RESSOURCE = st.text_input(
-        "Entrez votre numéro de ressource ADE (voir le numéro dans l'URL générée via export agenda dans ADE)",
+        "Entrez votre numéro de ressource ADE", # (voir le numéro dans l'URL générée via export agenda dans ADE)
         value = value if value else "",
     )
     if RESSOURCE:
@@ -385,7 +401,11 @@ try:
     teacher_name = get_teacher_name(records)
     st.session_state.teacher_name = teacher_name
     if len(teacher_name) > 0:
-        st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
+        st.markdown(
+            f"<p style='margin-top:-50px;'>Nom de l'enseignant : {st.session_state.teacher_name.title()}</p>",
+            unsafe_allow_html=True,
+        )
+        #st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
 
 finally:
     os.unlink(tmp_path)
