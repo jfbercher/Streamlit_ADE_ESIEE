@@ -64,6 +64,7 @@ if "restored" not in st.session_state:
     st.session_state.RESSOURCE = storage.getItem("stored_RESSOURCE")
     if st.session_state.RESSOURCE is None:
         st.session_state.RESSOURCE = ""
+    st.session_state.ADE_number_input = st.session_state.RESSOURCE # Init champ d'entrée
     st.session_state.total_dech = storage.getItem("stored_total_dech")
     if st.session_state.total_dech is None:
         st.session_state.total_dech = 100.0
@@ -249,7 +250,7 @@ def build_filiere_summary(df):
     return grp.sort_values("Heures", ascending=False).reset_index(drop=True)
 
 
-_COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
+_COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDmR?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
 _EP_RE = re.compile(r'\s*\(EP[^)]*\)', re.IGNORECASE)
 _PROJET_INTERNE_RE = re.compile(r'Projet\s+interne\s+(E[34])', re.IGNORECASE)
 
@@ -317,6 +318,12 @@ def style_modality(df_display):
         return [f"background-color: {color}" for _ in row]
     return df_display.style.apply(row_style, axis=1)
 
+def save_ADE_number():
+    ADE_number = st.session_state.ADE_number_input
+    st.session_state.RESSOURCE = ADE_number
+    storage.setItem("stored_RESSOURCE", ADE_number)
+    time.sleep(0.2) #tempo
+    #st.toast(f"Numéro de ressource (session - après) {st.session_state.RESSOURCE} (storage) {storage.getItem('stored_RESSOURCE')}" )
 
 # ---------------------------------------------------------------------------
 # File upload
@@ -361,18 +368,18 @@ with col_ressource_help:
     """)
 
 with col_ressource:
-    value = storage.getItem("stored_RESSOURCE")
-    RESSOURCE = st.text_input(
+    #value = st.session_state.RESSOURCE #storage.getItem("stored_RESSOURCE")
+    ADE_number = st.text_input(
         "Entrez votre numéro de ressource ADE", # (voir le numéro dans l'URL générée via export agenda dans ADE)
-        value = value if value else "",
+        #value = value if value else "",
+        on_change=save_ADE_number,
+        key="ADE_number_input",
+        help="Entrez votre numéro de ressource ADE (voir le mémo 'Comment le trouver' ci-contre)",
     )
-    if RESSOURCE:
-        st.session_state.RESSOURCE = RESSOURCE
-        storage.setItem("stored_RESSOURCE", RESSOURCE)
 
 ical = None
 # Déclenchement
-if uploaded is None and not RESSOURCE:
+if uploaded is None and not ADE_number:
     st.info("Entrez un numéro de ressource ADE **ou** importez un fichier `.ics`.")
     st.stop()
 
@@ -381,14 +388,13 @@ if uploaded is not None:
     ical = uploaded.getvalue()
 
 # si téléchargement depuis ADE
-elif RESSOURCE:
+elif ADE_number:
 
-    ical = get_ressource_from_ADE(RESSOURCE, current_year=st.session_state.selected_year)
+    ical = get_ressource_from_ADE(ADE_number, current_year=st.session_state.selected_year)
 
     uploaded = io.BytesIO(ical)
     uploaded.name = "edt.ics"
     uploaded.size = len(ical)
-
 
 # Parse — save to temp file so parse_ics can open it normally
 with tempfile.NamedTemporaryFile(suffix=".ics", delete=False) as tmp:
@@ -406,12 +412,15 @@ try:
             unsafe_allow_html=True,
         )
         #st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
+except:
+    st.error("Une erreur s'est produite lors du traitement du fichier Ical.")
 
 finally:
     os.unlink(tmp_path)
 
 if not records:
     st.error("Aucun événement valide trouvé dans ce fichier.")
+    time.sleep(2)
     st.stop()
 
 df = records_to_df(records)
