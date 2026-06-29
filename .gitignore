@@ -1,6 +1,10 @@
 # Données personnelles (emploi du temps)
 *.ics
 *.xlsx
+# Autre
+All_ESIEE_Name_ADENumbers.csv
+#
+.streamlit/secrets.toml
 
 # Python
 __pycache__/
