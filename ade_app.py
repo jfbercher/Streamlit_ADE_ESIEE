@@ -41,7 +41,7 @@ CURRENT_YEAR = "2025-2026"
 statuts = {'80-20':400, '100-0':500, '60-40':300, 'MC UGE':288}
 activites_non_planifiees = {"Décharge (HETP)":1, "Suivis stages E3/E4":2, "Suivis stages E5":5, "Suivis apprentis E3/E4FD":12,
                                         "Suivis apprentis E5":9, "Projet interne E4":35, "Projet interne E3":1,
-                                        "Tremplin recherche":15, "Dépassement de forfait":1, "Autre (somme en HETP)":1}
+                                        "Tremplin recherche":15, "Dépassement de forfait (HETP)":1, "Autre (somme en HETP)":1}
 
 if "edutime_csv_data" not in st.session_state:
     st.session_state.edutime_csv_data = None
@@ -144,7 +144,7 @@ def records_to_df(records):
             "Début":      r["dtstart"].strftime("%H:%M"),
             "Fin":        r["dtend"].strftime("%H:%M"),
             "Durée (h)":  round(r["duration_h"], 2),
-            "HETD (h)":   round(hetd(r["duration_h"], r["modality"]), 2),
+            "HETD (h)":   round(hetd(r["duration_h"], r["modality"]), 8),
             "HETP (h)":   round(hetp(r["duration_h"], r["modality"]), 2),
             "Lieu":       r["location"],
             "Modalité":   r["modality"],
@@ -745,6 +745,7 @@ with tab_pdc:
     df_pdc = df_pdc.rename(columns={
     "HETP (h)": "HETP",
     "HETD (h)": "HETD",
+    "Durée (h)": "Durée",
     "Nom": "Cours",
     "Modalité": "Activité"
     })
@@ -842,12 +843,38 @@ with tab_pdc:
 
     with tab_hetp:
         st.subheader("PdC HETP")
+        col_beg, col_activity, col_final = st.columns([0.5, 1, 4 ])
+        with col_activity:
+            activity_display_pdc_hetp = st.radio(
+            "**Affichage des activités**",
+                ["Durée", "HETP"],
+                index=0,
+                horizontal=True,
+                help="Affiche les activités (Cours, TD, etc) en durée effective ou équivalent HETP."
+            )
+        pas_maintenant = '''with col_total:
+            total_display = st.radio(
+            "Unité pour la colonne Total",
+                ["Durée","HETP", "HETD"],
+                index=1,
+                horizontal=True
+            )'''
+
+
         try:
-            df_hetp = compute_pdc_rea(df_pdc, "HETP")
+            df_hetp = compute_pdc_rea(df_pdc, activity_display_pdc_hetp)
         except KeyError:
             st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
+
+        total_hetp = 0
+        if activity_display_pdc_hetp == "HETP":
+            total_hetp = df_hetp.sum(axis=1)
+        if activity_display_pdc_hetp == "Durée":
+            for modality in df_hetp.columns:
+                total_hetp += df_hetp[modality]*HETP_COEFFICIENTS[modality]
+        # Ajout des activités non planifiées
         df_hetp['Quantité'] = 0
-        df_hetp['Total (HETP)'] = df_hetp.sum(axis=1)
+        df_hetp['Total (HETP)'] = total_hetp #df_hetp.sum(axis=1)
         idx = df_hetp.index.tolist()
         for index, row in st.session_state.df_non_planifie.iterrows():
             if row['HETP'] != 0:
@@ -889,19 +916,51 @@ Par exemple des actvités réalisées dans l'UGE mais Hors-ESIEE, et qui ne conc
                 st.session_state.activities_to_remove = []
                 st.rerun()
 
-    if df_hetp is not None:
-        df_hetd = df_hetp.apply(lambda x: x*2/3).rename(index={'Total (HETP)': 'Total (HETD)'}, 
-                                                    columns={'Total (HETP)': 'Total (HETD)'})
-    else: # Ceci ne devrait pas arriver, mais juste au cas où... 
-        st.error("Visualiser le PdC HETP avant de visualiser le PdC HETD.")
             
     with tab_hetd:
         st.subheader("PdC HETD")
+        col_beg, col_activity, col_final = st.columns([0.5, 1, 4 ])
+        with col_activity:
+            activity_display_pdc_hetd = st.radio(
+            "**Affichage des activités**",
+                ["Durée", "HETD"],
+                index=0,
+                horizontal=True,
+                help="Affiche les activités (Cours, TD, etc) en durée effective ou équivalent HETP."
+            )
+
+        if df_hetp is None:
+            st.error("Visualiser le PdC HETP avant de visualiser le PdC HETD.")
+
         try:
-            #df_hetd = compute_pdc_rea(df_pdc, "HETD")
-            st.dataframe(df_hetd, width='stretch', height='content')
+            df_hetd = compute_pdc_rea(df_pdc, activity_display_pdc_hetd)
         except KeyError:
             st.error("La colonne 'HETD' est introuvable dans le fichier fourni.")
+
+        total_hetd = 0
+        if activity_display_pdc_hetd == "HETD":
+            total_hetd = df_hetd.sum(axis=1)
+        if activity_display_pdc_hetd == "Durée":
+            for modality in df_hetd.columns:
+                total_hetd += df_hetd[modality]*HETD_COEFFICIENTS_ESIEE[modality]
+        # Ajout des activités non planifiées
+        df_hetd['Quantité'] = 0
+        df_hetd['Total (HETD)'] = total_hetd #df_hetp.sum(axis=1)
+        idx = df_hetd.index.tolist()
+        for index, row in st.session_state.df_non_planifie.iterrows():
+            if row['HETP'] != 0:
+                L = len(df_hetd)
+                df_hetd.loc[L, 'Quantité'] = row['Quantité']
+                df_hetd.loc[L, 'Total (HETD)'] = row['HETP']*2/3
+                idx.append(index)
+        df_hetd.index = idx
+        df_hetd = df_hetd.fillna(0)  
+        ligne_total = df_hetd.sum(axis=0)
+        df_hetd.loc[len(df_hetd)] = ligne_total
+        idx.append('Total')
+        df_hetd.index = idx
+
+        st.dataframe(df_hetd.apply(lambda x: round(x,2)), width='stretch', height='content')
 
 
     total_hreal_hetp = df_hetp.loc['Total', 'Total (HETP)']
