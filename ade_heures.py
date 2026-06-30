@@ -287,6 +287,7 @@ MODALITY_COLORS = {
     'CM/TD_Trou_ADE':  'FFFFF3CD',
     'Oraux':           'FFD7DBDD',  # Light grey
     'Oraux_Trou_ADE':  'FFFFF3CD',
+    'Soutenance':      'FFFFF3CD',
     'Soutenance_Trou_ADE': 'FFFFF3CD',
     'Autre':           'FFFDFEFE',  # Near-white
 }
@@ -305,7 +306,7 @@ MODALITY_ORDER = [
 # CM/TD et Autre = non comptabilisé (0)
 HETD_COEFFICIENTS_ESIEE = {
     'CM':         4 / 3,
-    'CM/TD':      1.25,
+    'CM/TD':      7 / 6,
     'CM-plus':    5 / 3,
     'TD':         1.0,
     'TDR':        4/3,
@@ -331,7 +332,7 @@ HETD_COEFFICIENTS_Univ = {
 
 HETP_COEFFICIENTS = {
     'CM':         2,
-    'CM/TD':      0,
+    'CM/TD':      1.75, 
     'CM-plus':    2.5,
     'TD':         1.5,
     'TDR':        2,
