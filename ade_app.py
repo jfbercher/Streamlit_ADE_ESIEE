@@ -250,14 +250,28 @@ def build_filiere_summary(df):
     return grp.sort_values("Heures", ascending=False).reset_index(drop=True)
 
 
-_COURSE_SUFFIX_RE = re.compile(r'\s+(TP|TDR?|TDRm?|TDmR?|TDm?|C(OURS)?)\s*\d+$', re.IGNORECASE)
+_COURSE_SUFFIX_RE = re.compile(
+    r'(TPs?|TDm?R?|C(?:OURS)?)\s*(?:[A-Za-z0-9.]{1,4}\d[A-Za-z]?|\d[A-Za-z]?|[A-Za-z])?$',
+    re.IGNORECASE,
+)
+_COURSE_SUFFIX_RE_1 = re.compile(
+    r'\s+(TPs?|TDm?R?|Cours)(?:\s*[A-Za-z0-9.]{1,5})?$',
+    re.IGNORECASE,
+)
+
+_COURSE_SUFFIX_RE_2 = re.compile(
+    r'\s+C\s*\d[A-Za-z0-9.]{0,4}$',
+    re.IGNORECASE,
+)
 _EP_RE = re.compile(r'\s*\(EP[^)]*\)', re.IGNORECASE)
 _PROJET_INTERNE_RE = re.compile(r'Projet\s+interne\s+(E[34])', re.IGNORECASE)
 
 
 def normalize_course_name(name):
     """Supprime les suffixes de groupe en fin de nom (TP1, TP2, C1, C2, TD1…)."""
-    return _COURSE_SUFFIX_RE.sub('', name).strip()
+    name = _COURSE_SUFFIX_RE_1.sub('', name).strip()
+    name = _COURSE_SUFFIX_RE_2.sub('', name).strip()
+    return name
 
 
 def build_course_summary(df):
@@ -424,6 +438,7 @@ if not records:
     st.stop()
 
 df = records_to_df(records)
+df["Modalité"] = df["Modalité"].str.replace(r"_Trou_ADE$", "", regex=True,)
 
 # Réinitialiser les filtres si un nouveau fichier est uploadé
 _file_id = uploaded.name + str(uploaded.size)
@@ -733,6 +748,8 @@ with tab_filiere:
 # ---- Tab : Par nom de cours ----
 with tab_pdc:
     df_pdc = df.copy()
+    df_pdc = df_pdc[df_pdc["Modalité"] != 'Autre']
+    df_pdc["Modalité"] = df_pdc["Modalité"].str.replace(r"_Trou_ADE$","",regex=True,)
     df_pdc["Nom"] = df_pdc["Nom"].apply(normalize_course_name)
     if "activities_to_remove" in st.session_state:
         activities_to_remove = list(set(st.session_state.activities_to_remove))
