@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 import pandas as pd
+import requests
+from requests.auth import HTTPBasicAuth
+import xml.etree.ElementTree as ET
 
 _PARIS_TZ = ZoneInfo("Europe/Paris")
 
@@ -102,7 +105,7 @@ def decode_description(desc_raw):
 # ---------------------------------------------------------------------------
 
 _CODE_RE  = re.compile(r'^(?:[A-Z0-9][A-Z0-9\-]*|E\d[A-Za-z0-9\-]*)$')  # majuscules, ou E+chiffre avec minuscules possibles (ex: E3-1d-S1)
-_PROMO_RE = re.compile(r'^E\d')                                            # starts with E + digit → promo level
+_PROMO_RE = re.compile(r'^E\d-')                                            # starts with E + digit → promo level
 
 
 def extract_codes(desc_lines):
@@ -207,8 +210,8 @@ def process_events(raw_events):
         base_mod = modality.replace("_Trou_ADE", "")
         # ^E[12](-[A-Za-z]+)*$ : promotion entière (E2, E2-BIO…) mais pas un groupe (E2-5-EST, E3-1d-S1)
         is_cm_plus = base_mod == 'CM' and (
-            any(re.match(r'^E[12](-[A-Za-z]+)*$', p) for p in promos) or len(promos) >= 5
-        )
+            any(re.match(r'^E[12](-[A-Za-z]+)*$', p) for p in promos) or len(promos) >= 4
+        ) # souci car promos mélange des groupes et des noms de promos
         if is_cm_plus:
             modality = 'CM-plus_Trou_ADE' if '_Trou_ADE' in modality else 'CM-plus'
         records.append({
@@ -240,6 +243,211 @@ def get_teacher_name(records):
         return ""
 
     return detected_prof
+
+# ---------------------------------------
+# Kind of "get_fromADE_API" library     #
+# ---------------------------------------
+
+import io
+def connectADE_UGE(id='1', verbose=False):
+    
+    #login
+    url = "https://edt-consult.univ-eiffel.fr/jsp/webapi"
+    # On garde uniquement la fonction dans les paramètres de l'URL
+    params = dict(function='connect')
+
+    # Les identifiants sont passés de manière sécurisée dans les en-têtes (Headers)
+    u = requests.get(url, params=params, auth=HTTPBasicAuth('visuedt', 'visuedt'))
+    arbre = ET.fromstring(u.content)
+    session = arbre.get('id')
+
+    #Start projet
+    params = dict(sessionId=session, function='setProject', projectId=id)
+    u = requests.get(url, params=params)
+    if verbose: print(u.content)
+    return session
+
+def getActivities(session, user_id = "7780", detail='8' ): 
+    url = "https://edt-consult.univ-eiffel.fr/jsp/webapi"
+
+    # Paramètres requis pour obtenir l'emploi du temps
+    params = {
+        'function': 'getActivities',
+        #'projectId': '1',
+        'sessionId': session,
+        'resources': user_id,            # L'ID de l'utilisateur cible
+        'startDate': '01/09/2025',       
+        'endDate': '30/09/2026',
+
+        # Paramètres optionnels mais recommandés pour avoir le détail
+        'detail': '12',                # Récupère les détails (matière, salle, prof...)
+        'clips': 'true',
+        'forced': 'true'                 # Force la mise à jour des données si disponible
+    }
+
+    # Requête GET avec l'authentification HTTP Basic validée juste avant
+    u = requests.get(
+        url, 
+        params=params, 
+        #auth=HTTPBasicAuth('visuedt', 'visuedt')
+    )
+
+    return u.text
+
+def getEvents(session, user_id = "7780", detail='8' ): 
+    
+    import requests
+    from requests.auth import HTTPBasicAuth
+
+    url = "https://edt-consult.univ-eiffel.fr/jsp/webapi"
+
+
+
+    # Paramètres requis pour obtenir l'emploi du temps
+    params = {
+        'function': 'getEvents',
+        #'projectId': '1',
+        'sessionId': session,
+        'resources': user_id,            # L'ID de l'utilisateur cible
+        'startDate': '01/09/2025',       
+        'endDate': '30/09/2026',
+
+        # Paramètres optionnels mais recommandés pour avoir le détail
+        'tree': 'false',
+        'detail': detail,                # Récupère les détails (matière, salle, prof...)
+        'clips': 'true',
+        'forced': 'true'                 # Force la mise à jour des données si disponible
+    }
+
+    # Requête GET avec l'authentification HTTP Basic validée juste avant
+    u = requests.get(
+        url, 
+        params=params, 
+        #auth=HTTPBasicAuth('visuedt', 'visuedt')
+    )
+
+    return u.text
+def events_to_df(xml_string):
+    import xml.etree.ElementTree as ET
+    import pandas as pd
+    from collections import defaultdict
+
+    root = ET.fromstring(xml_string)
+
+    rows = []
+
+    for event in root.findall(".//event"):
+        row = event.attrib.copy()
+
+        resources = defaultdict(list)
+
+        for resource in event.findall("./resources/resource"):
+            resources[resource.attrib["category"]].append(resource.attrib["name"])
+
+        for cat, names in resources.items():
+            row[cat] = ", ".join(names)
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    return df
+
+def logoutADE(session, verbose=False):
+    #logout
+    url = "https://edt-consult.univ-eiffel.fr/jsp/webapi"
+    params = dict(sessionId=session, function='disconnect')
+    u = requests.get(url, params=params)
+    if verbose: print(u.content)
+
+Example = '''# -----------------------------------------
+USER_ID = "7995"
+session = connectADE_UGE(verbose=False)
+# 
+
+out = getActivities(session, user_id = USER_ID, detail='8' )
+activities_df = pd.read_xml(io.StringIO(out))
+if 'id' in activities_df.columns:
+    activities_df.index = activities_df['id']
+out = getEvents(session, user_id=USER_ID)
+events_df = events_to_df(out)
+logoutADE(session, verbose=False)'''
+
+def records_and_df_from_ADE_API(events_df, activities_df):
+
+    df = events_df.copy().fillna('')
+    events_df['trainee'] = events_df['trainee'].astype(str)
+    
+    df = df[['id', 'activityId', 'name', 'endHour',
+           'startHour', 'date',  'trainee', 'category6', 'category7',
+           'instructor', 'classroom']]
+
+    df.columns = ['id', 'activityId', 'description', 'dtend', 'dtstart', 'date',  'trainee', 'category6', 'nom', 'instructor', 'location']
+
+    for index, row in events_df.iterrows():
+        activityId = int(row['activityId'])
+        try:
+            df.loc[index, ['modality', 'ESIEE_course', 'code_Apogee']] = tuple(activities_df.loc[activityId, ['type', 'codeZ', 'code']])
+        except:
+            print(tuple(activities_df.loc[activityId, ['type', 'codeZ', 'code']]))
+        #df.loc[index, 'promo'] = ' / '.join(list(set([x.split("-", 1)[0].replace('Grp','').strip() for x in df.loc[index, 'trainee'].split(',')])))
+        df.loc[index, 'promo'] = ' / '.join([x.replace('Grp','').strip() for x in df.loc[index, 'trainee'].split(',')])
+        df.loc[index, 'filiere'] = ' / '.join(list(set([x.split("-", 1)[0].strip() for x in df.loc[index, 'category6'].split(',')])))
+        if df.loc[index, 'nom'] == '': df.loc[index, 'nom']=df.loc[index, 'description']
+    
+    df['duration_h'] = (
+        pd.to_datetime(df['dtend'], format="%H:%M")
+        - pd.to_datetime(df['dtstart'], format="%H:%M")
+    ).dt.total_seconds().div(60*60)
+
+    df = df.drop(['trainee', 'category6'], axis=1)
+
+    df["dtstart"] = pd.to_datetime(df["date"] + " " + df["dtstart"], format="%d/%m/%Y %H:%M")
+    df["dtend"] = pd.to_datetime(df["date"] + " " + df["dtend"], format="%d/%m/%Y %H:%M")
+    df["_dtstart"] =  df["dtstart"]
+    df["modality"] = df["modality"].fillna("Autre")
+    df["modality"] = df["modality"].replace("Activités diverses", "Autre")
+    df["modality"] = df["modality"].replace("CM-TD", "CM/TD")
+
+    for index, row in df.iterrows():
+        promos = list(set(row['promo'].split(' / ')))
+        if (row["modality"] == 'CM' and (any(re.match(r'^E[12](-[A-Za-z]+)*$', p) for p in promos) or len(promos) >= 4)):
+            df.loc[index, "modality"] = 'CM-plus' 
+    
+    # Records
+    records = []
+    for index, row in df.iterrows():
+        records.append(row.to_dict())
+
+        
+    df.rename(columns={"nom": "Nom", "filiere": "Filière", "promo": "Promo",  "dtstart": "Début", "dtend": "Fin", "duration_h": "Durée (h)", "modality": "Modalité", "location": "Lieu"}, inplace=True)
+    
+    return records, df
+
+def get_from_ADE_API(USER_ID):
+    session = connectADE_UGE(verbose=False)
+    user_ids = USER_ID.split(',')
+    activities_df = pd.DataFrame()
+    events_df = pd.DataFrame()
+    
+    for user_id in user_ids:
+        print('user_id', user_id)
+        out = getActivities(session, user_id = user_id, detail='8' )
+        try:
+            activities_tmp_df = pd.read_xml(io.StringIO(out))
+        except:
+            print(out)
+        if 'id' in activities_tmp_df.columns:
+            activities_tmp_df.index = activities_tmp_df['id']
+        out = getEvents(session, user_id=user_id)
+        events_tmp_df = events_to_df(out)
+        events_df = pd.concat([events_df, events_tmp_df]).reset_index()
+        activities_df = pd.concat([activities_df, activities_tmp_df]) 
+        activities_df.drop_duplicates(inplace=True)
+    logoutADE(session, verbose=False)
+    records, df = records_and_df_from_ADE_API(events_df, activities_df)
+    return events_df, activities_df, records, df
+
+# -------- End of LIB --------------------------------------
 
 # ---------------------------------------------------------------------------
 # Pivot table (pdc réalisé)
@@ -313,7 +521,7 @@ HETD_COEFFICIENTS_ESIEE = {
     'TP':         1 / 1.5,
     'TP Seul':    1.0,
     'Oraux':      1 / 1.5,
-    'Soutenance': 1 / 1.5,
+    'Soutenance': 0.0, #1 / 1.5,
     'Autre':      0.0,
 }
 
@@ -339,7 +547,7 @@ HETP_COEFFICIENTS = {
     'TP':         1,
     'TP Seul':    1.5,
     'Oraux':      1,
-    'Soutenance': 1,
+    'Soutenance': 0.0, #1,
     'Autre':      0.0,
 }
 
