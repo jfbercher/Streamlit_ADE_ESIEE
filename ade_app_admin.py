@@ -53,6 +53,9 @@ if "admin_connected" not in st.session_state:
 if "direct_api" not in st.session_state: 
     st.session_state.direct_api = False
 
+if "keep_only_esiee" not in st.session_state:
+    st.session_state.keep_only_esiee = True
+
 # ---------------------------------------------------------------------------
 # Session restore
 # ---------------------------------------------------------------------------
@@ -164,7 +167,7 @@ def records_to_df(records):
             "Lieu":       r["location"],
             "Modalité":   r["modality"],
             # keep raw dtstart for sorting
-            "_dtstart":   r["dtstart"], 
+            "_dtstart":   r["dtstart"],
         })
     return pd.DataFrame(rows)
 
@@ -354,7 +357,7 @@ def save_ADE_number():
     time.sleep(0.2) #tempo
     #st.toast(f"Numéro de ressource (session - après) {st.session_state.RESSOURCE} (storage) {storage.getItem('stored_RESSOURCE')}" )
 
-#@st.cache_data()
+@st.cache_data()
 def get_from_ADE_API_cached(ADE_number):
     events_df, activities_df, records, df = get_from_ADE_API(ADE_number)
     df["HETD (h)"] = df.apply(lambda r: hetd(r["Durée (h)"], r["Modalité"]), axis=1)
@@ -422,7 +425,6 @@ direct_api = st.checkbox("Utiliser directement l'API d'ADE ? (Test)",
                          value=st.session_state.direct_api, 
                          help="Test de l'utilisation directe de l'API d'ADE au lieu de l'utilisation de l'export ICAL depuis ADE")
 st.session_state.direct_api = direct_api
-
 
 ical = None
 # Déclenchement
@@ -905,8 +907,20 @@ with tab_pdc:
     # -----------
 
     st.subheader("3) Plans de charge réalisés HETP ou HETD")
+
+
+    if st.session_state.direct_api:
+        keep_only_esiee = st.checkbox("Ne conserver que les activités Esiee Paris", value=st.session_state.keep_only_esiee, 
+                    help="Ne conserver que les activités Esiee Paris : filter les autres activités")
+
+        if keep_only_esiee:
+            st.session_state.keep_only_esiee = keep_only_esiee
+            df_pdc = df_pdc[df_pdc['ESIEE_course'].str.upper() == 'ESIEE PARIS']
+
     tab_hetp, tab_hetd = st.tabs(["HETP", "HETD"])
     df_hetp = None
+
+
 
     with tab_hetp:
         st.subheader("PdC HETP")
@@ -930,7 +944,6 @@ with tab_pdc:
 
         try:
             df_hetp = compute_pdc_rea(df_pdc, activity_display_pdc_hetp)
-
         except KeyError:
             st.error("La colonne 'HETP' est introuvable dans le fichier fourni.")
 
