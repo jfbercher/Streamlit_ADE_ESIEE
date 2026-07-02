@@ -34,6 +34,7 @@ from ade_heures import (
     extract_codes,
     get_teacher_name,
     compute_pdc_rea,
+    get_from_ADE_API,
 )
 
 ANNEES = {'2025-2026':1, '2026-2027':2}
@@ -45,6 +46,13 @@ activites_non_planifiees = {"Décharge (HETP)":1, "Suivis stages E3/E4":2, "Suiv
 
 if "edutime_csv_data" not in st.session_state:
     st.session_state.edutime_csv_data = None
+
+
+if "direct_api" not in st.session_state: 
+    st.session_state.direct_api = False
+
+if "keep_only_esiee" not in st.session_state:
+    st.session_state.keep_only_esiee = True
 
 # ---------------------------------------------------------------------------
 # Session restore
@@ -255,7 +263,7 @@ _COURSE_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _COURSE_SUFFIX_RE_1 = re.compile(
-    r'\s+(TPs?|TDm?R?|Cours)(?:\s*[A-Za-z0-9.]{1,5})?$',
+    r'\s+(TPs?|TDm?R?|Cours)(?:\s*[A-Za-z0-9.-]{1,5})?$',
     re.IGNORECASE,
 )
 
@@ -339,6 +347,13 @@ def save_ADE_number():
     time.sleep(0.2) #tempo
     #st.toast(f"Numéro de ressource (session - après) {st.session_state.RESSOURCE} (storage) {storage.getItem('stored_RESSOURCE')}" )
 
+@st.cache_data()
+def get_from_ADE_API_cached(ADE_number):
+    events_df, activities_df, records, df = get_from_ADE_API(ADE_number)
+    df["HETD (h)"] = df.apply(lambda r: hetd(r["Durée (h)"], r["Modalité"]), axis=1)
+    df["HETP (h)"] = df.apply(lambda r: hetp(r["Durée (h)"], r["Modalité"]), axis=1)
+    return events_df, activities_df, records, df
+
 # ---------------------------------------------------------------------------
 # File upload
 # ---------------------------------------------------------------------------
@@ -391,61 +406,79 @@ with col_ressource:
         help="Entrez votre numéro de ressource ADE (voir le mémo 'Comment le trouver' ci-contre)",
     )
 
+direct_api = st.checkbox("Utiliser directement l'API d'ADE ? (Test)", 
+                         value=st.session_state.direct_api, 
+                         help="Test de l'utilisation directe de l'API d'ADE au lieu de l'utilisation de l'export ICAL depuis ADE")
+st.session_state.direct_api = direct_api
+
 ical = None
 # Déclenchement
-if uploaded is None and not ADE_number:
+if uploaded is None and not ADE_number and not st.session_state.direct_api:
     st.info("Entrez un numéro de ressource ADE **ou** importez un fichier `.ics`.")
     st.stop()
 
-# si fichier uploadé
-if uploaded is not None:
-    ical = uploaded.getvalue()
+if not st.session_state.direct_api:
+        
+    # si fichier uploadé
+    if uploaded is not None:
+        ical = uploaded.getvalue()
 
-# si téléchargement depuis ADE
-elif ADE_number:
+    # si téléchargement depuis ADE
+    elif ADE_number:
 
-    ical = get_ressource_from_ADE(ADE_number, current_year=st.session_state.selected_year)
+        ical = get_ressource_from_ADE(ADE_number, current_year=st.session_state.selected_year)
 
-    uploaded = io.BytesIO(ical)
-    uploaded.name = "edt.ics"
-    uploaded.size = len(ical)
+        uploaded = io.BytesIO(ical)
+        uploaded.name = "edt.ics"
+        uploaded.size = len(ical)
 
-# Parse — save to temp file so parse_ics can open it normally
-with tempfile.NamedTemporaryFile(suffix=".ics", delete=False) as tmp:
-    tmp.write(uploaded.read())
-    tmp_path = tmp.name
+    # Parse — save to temp file so parse_ics can open it normally
+    with tempfile.NamedTemporaryFile(suffix=".ics", delete=False) as tmp:
+        tmp.write(uploaded.read())
+        tmp_path = tmp.name
 
-try:
-    raw_events = parse_ics(tmp_path)
-    records    = process_events(raw_events)
-    teacher_name = get_teacher_name(records)
+    try:
+        raw_events = parse_ics(tmp_path)
+        records    = process_events(raw_events)
+        teacher_name = get_teacher_name(records)
+        st.session_state.teacher_name = teacher_name
+        if len(teacher_name) > 0:
+            st.markdown(
+                f"<p style='margin-top:-80px;'>Nom de l'enseignant : {st.session_state.teacher_name.title()}</p>",
+                unsafe_allow_html=True,
+            )
+            #st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
+    except:
+        st.error("Une erreur s'est produite lors du traitement du fichier Ical.")
+
+    finally:
+        os.unlink(tmp_path)
+
+    if not records:
+        st.error("Aucun événement valide trouvé dans ce fichier.")
+        time.sleep(2)
+        st.stop()
+
+    df = records_to_df(records)
+    df["Modalité"] = df["Modalité"].str.replace(r"_Trou_ADE$", "", regex=True,)
+
+    # Réinitialiser les filtres si un nouveau fichier est uploadé
+    _file_id = uploaded.name + str(uploaded.size)
+    if st.session_state.get("_last_file_id") != _file_id:
+        for key in ["filter_mod", "filter_fil_mod", "filter_promo_mod", "filter_date_mod", "select_course", "select_filiere"]:
+            st.session_state.pop(key, None)
+        st.session_state["_last_file_id"] = _file_id
+else:
+    events_df, activities_df, records, df = get_from_ADE_API_cached(ADE_number)
+    teacher_name = df['instructor'].mode().iloc[0]
     st.session_state.teacher_name = teacher_name
     if len(teacher_name) > 0:
         st.markdown(
-            f"<p style='margin-top:-50px;'>Nom de l'enseignant : {st.session_state.teacher_name.title()}</p>",
+            f"<p style='margin-top:-80px;'>Nom de l'enseignant : {st.session_state.teacher_name.title()}</p>",
             unsafe_allow_html=True,
         )
         #st.write(f"Nom de l'enseignant : {st.session_state.teacher_name}")
-except:
-    st.error("Une erreur s'est produite lors du traitement du fichier Ical.")
 
-finally:
-    os.unlink(tmp_path)
-
-if not records:
-    st.error("Aucun événement valide trouvé dans ce fichier.")
-    time.sleep(2)
-    st.stop()
-
-df = records_to_df(records)
-df["Modalité"] = df["Modalité"].str.replace(r"_Trou_ADE$", "", regex=True,)
-
-# Réinitialiser les filtres si un nouveau fichier est uploadé
-_file_id = uploaded.name + str(uploaded.size)
-if st.session_state.get("_last_file_id") != _file_id:
-    for key in ["filter_mod", "filter_fil_mod", "filter_promo_mod", "filter_date_mod", "select_course", "select_filiere"]:
-        st.session_state.pop(key, None)
-    st.session_state["_last_file_id"] = _file_id
 
 # ---------------------------------------------------------------------------
 # Top metrics
@@ -499,7 +532,10 @@ st.markdown("---")
 st.header("⬇️ Télécharger le fichier Excel")
 
 excel_bytes = make_excel_bytes(records)
-default_name = uploaded.name.replace(".ics", "_heures.xlsx")
+if uploaded is not None:
+    default_name = uploaded.name.replace(".ics", "_heures.xlsx")
+else:
+    default_name = "MesHeuresESIEE.xlsx"
 
 st.download_button(
     label="📥 Télécharger le fichier Excel complet",
@@ -748,7 +784,8 @@ with tab_filiere:
 # ---- Tab : Par nom de cours ----
 with tab_pdc:
     df_pdc = df.copy()
-    df_pdc = df_pdc[df_pdc["Modalité"] != 'Autre']
+    df_pdc = df_pdc[df_pdc["Modalité"] != 'Autre']          # Suppression pour éviter de polluer le pdc
+    df_pdc = df_pdc[df_pdc["Modalité"] != 'Soutenance'] 
     df_pdc["Modalité"] = df_pdc["Modalité"].str.replace(r"_Trou_ADE$","",regex=True,)
     df_pdc["Nom"] = df_pdc["Nom"].apply(normalize_course_name)
     if "activities_to_remove" in st.session_state:
@@ -855,6 +892,16 @@ with tab_pdc:
     # -----------
 
     st.subheader("3) Plans de charge réalisés HETP ou HETD")
+
+
+    if st.session_state.direct_api:
+        keep_only_esiee = st.checkbox("Ne conserver que les activités Esiee Paris", value=st.session_state.keep_only_esiee, 
+                    help="Ne conserver que les activités Esiee Paris : filter les autres activités")
+
+        if keep_only_esiee:
+            st.session_state.keep_only_esiee = keep_only_esiee
+            df_pdc = df_pdc[df_pdc['ESIEE_course'].str.upper() == 'ESIEE PARIS']
+
     tab_hetp, tab_hetd = st.tabs(["HETP", "HETD"])
     df_hetp = None
 
