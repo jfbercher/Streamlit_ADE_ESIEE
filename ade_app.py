@@ -872,7 +872,7 @@ with tab_pdc:
         st.markdown(f"**Total des heures non planifiées (en HETP)** : {edited['HETP'].sum():.2f}")
 
         st.info("**Décharges**: Entrez directement la somme des HETP correspondantes. \n\n**Projets E3**: Entrez directement la somme des HETP correspondantes, qui dépend du nombre de projets suivis et dans chacun du nombre d'élèves. Si plusieurs suiveurs, ajustez en fonction des prorata de suivis. \n\n" \
-        "👉🏼 Formule: Par suivi N_HETP = 8 + 0.5\*NbreSemaines\*NbreEtudiants (en 2025-26, NbreSemaines=7)")
+        "👉🏼 Formule: Par suivi N_HETP = 8 + 0.5\\*NbreSemaines\\*NbreEtudiants (en 2025-26, NbreSemaines=7)")
 
         edited["HETP"] = edited["Quantité"]*edited["Tarif/unité"]
 
